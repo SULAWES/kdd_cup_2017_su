@@ -13,19 +13,25 @@ class RidgeRegressor:
         self.y_mean = 0.0
         self.coef = None
 
-    def fit(self, x, y) -> "RidgeRegressor":
+    def fit(self, x, y, sample_weight=None) -> "RidgeRegressor":
         x = np.asarray(x, dtype=float)
         y = np.asarray(y, dtype=float)
-        self.x_mean = x.mean(axis=0)
-        self.x_std = x.std(axis=0)
+        if sample_weight is None:
+            sample_weight = np.ones_like(y)
+        sample_weight = np.asarray(sample_weight, dtype=float)
+        sample_weight = sample_weight / sample_weight.mean()
+        self.x_mean = np.average(x, axis=0, weights=sample_weight)
+        self.x_std = np.sqrt(np.average((x - self.x_mean) ** 2, axis=0, weights=sample_weight))
         self.x_std[self.x_std == 0] = 1.0
-        self.y_mean = float(y.mean())
+        self.y_mean = float(np.average(y, weights=sample_weight))
 
         x_scaled = (x - self.x_mean) / self.x_std
         y_centered = y - self.y_mean
-        xtx = x_scaled.T @ x_scaled
+        weighted_x = x_scaled * np.sqrt(sample_weight)[:, None]
+        weighted_y = y_centered * np.sqrt(sample_weight)
+        xtx = weighted_x.T @ weighted_x
         penalty = self.alpha * np.eye(xtx.shape[0])
-        self.coef = np.linalg.solve(xtx + penalty, x_scaled.T @ y_centered)
+        self.coef = np.linalg.solve(xtx + penalty, weighted_x.T @ weighted_y)
         return self
 
     def predict(self, x):
@@ -39,8 +45,11 @@ class NonNegativeRegressor:
     def __init__(self, estimator):
         self.estimator = estimator
 
-    def fit(self, x, y) -> "NonNegativeRegressor":
-        self.estimator.fit(x, y)
+    def fit(self, x, y, sample_weight=None) -> "NonNegativeRegressor":
+        if sample_weight is None:
+            self.estimator.fit(x, y)
+        else:
+            self.estimator.fit(x, y, sample_weight=sample_weight)
         return self
 
     def predict(self, x):
@@ -60,7 +69,7 @@ def make_regressor(name: str, alpha: float = 20.0, random_state: int = 42):
             ExtraTreesRegressor(
                 n_estimators=600,
                 max_depth=None,
-                min_samples_leaf=8,
+                min_samples_leaf=12,
                 random_state=random_state,
                 n_jobs=-1,
             )

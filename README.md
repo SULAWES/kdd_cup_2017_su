@@ -41,6 +41,7 @@ python run_task2.py --model hgb validate
 python run_task2.py --model extra validate
 python run_task2.py --group block --target-transform raw validate
 python run_task2.py --use-weather validate
+python run_task2.py --sample-weight-power 0 validate
 ```
 
 输出：
@@ -52,8 +53,9 @@ python run_task2.py --use-weather validate
 
 - 训练：`2016-09-19` 至 `2016-10-17`
 - 验证：用 phase1 test 观测窗口预测 `2016-10-18` 至 `2016-10-24`
-- 默认 `extra + global + log + 观测结构特征 + 无天气` 验证 MAPE：约 `0.126615`
-- `extra + global + log + 观测结构特征 + 天气` 验证 MAPE：约 `0.127509`
+- 默认 `extra + global + log + 观测结构特征 + 无天气 + 轻量 MAPE 权重` 验证 MAPE：约 `0.124208`
+- `extra + global + log + 观测结构特征 + 无天气 + 无权重` 验证 MAPE：约 `0.128240`
+- `extra + global + log + 观测结构特征 + 天气 + 轻量 MAPE 权重` 验证 MAPE：约 `0.125849`
 - `extra + block + raw` 验证 MAPE：约 `0.137534`
 - `lgbm + global + log` 验证 MAPE：约 `0.147154`
 - `ridge + global + raw` 验证 MAPE：约 `0.196292`

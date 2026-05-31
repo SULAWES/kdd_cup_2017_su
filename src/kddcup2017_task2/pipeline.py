@@ -53,6 +53,7 @@ def train_and_predict(
     group,
     target_transform,
     include_weather,
+    sample_weight_power,
 ):
     train_rows = make_target_rows(train_days, combos)
     y_train = np.array([target_volume(train_agg, row) for row in train_rows], dtype=float)
@@ -77,9 +78,14 @@ def train_and_predict(
         x_train = vectorizer.fit_transform([train_features[i] for i in train_idx])
         x_pred = vectorizer.transform([pred_features[i] for i in pred_idx])
         target = y_train[train_idx]
+        sample_weight = None
+        if sample_weight_power > 0:
+            denom = np.maximum(target, 1.0)
+            sample_weight = (float(np.mean(denom)) / denom) ** sample_weight_power
+            sample_weight = sample_weight / np.mean(sample_weight)
         if target_transform == "log":
             target = np.log1p(target)
-        model = make_regressor(model_name, alpha=alpha).fit(x_train, target)
+        model = make_regressor(model_name, alpha=alpha).fit(x_train, target, sample_weight=sample_weight)
         group_preds = model.predict(x_pred)
         if target_transform == "log":
             group_preds = np.expm1(group_preds)
@@ -117,6 +123,7 @@ def validate(args) -> None:
         args.group,
         args.target_transform,
         args.use_weather,
+        args.sample_weight_power,
     )
     actual = np.array([target_volume(train2, row) for row in rows], dtype=float)
     score = mape(actual, preds)
@@ -124,6 +131,7 @@ def validate(args) -> None:
     print(f"group={args.group}")
     print(f"target_transform={args.target_transform}")
     print(f"use_weather={args.use_weather}")
+    print(f"sample_weight_power={args.sample_weight_power}")
     print(f"validation_rows={len(rows)}")
     print(f"validation_mape={score:.6f}")
     print(f"actual_mean={actual.mean():.3f}")
@@ -167,12 +175,14 @@ def predict(args) -> None:
         args.group,
         args.target_transform,
         args.use_weather,
+        args.sample_weight_power,
     )
     write_submission(args.output, rows, preds)
     print(f"model={args.model}")
     print(f"group={args.group}")
     print(f"target_transform={args.target_transform}")
     print(f"use_weather={args.use_weather}")
+    print(f"sample_weight_power={args.sample_weight_power}")
     print(f"train_rows={len(train_days) * len(combos) * 12}")
     print(f"prediction_rows={len(rows)}")
     print(f"submission={args.output}")
@@ -189,6 +199,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     )
     parser.add_argument("--target-transform", choices=["log", "raw"], default="log")
     parser.add_argument("--use-weather", action="store_true", help="include weather features; off by default")
+    parser.add_argument("--sample-weight-power", type=float, default=0.3)
     parser.add_argument("--alpha", type=float, default=20.0)
     sub = parser.add_subparsers(dest="command")
 

@@ -40,6 +40,7 @@ python run_task2.py predict
 - 目标变换：`log1p(volume)`，预测后用 `expm1` 还原
 - 观测窗口结构特征：车型、ETC、车辆类型的 2 小时汇总计数和占比
 - 天气特征：默认关闭，可用 `--use-weather` 启用
+- 样本权重：默认 `--sample-weight-power 0.3`，轻微提高低流量样本权重以贴近 MAPE
 - 提交文件：`outputs/submission_task2_volume.csv`
 
 ## 已完成
@@ -66,7 +67,8 @@ phase1 离线验证方式：
 - ExtraTrees + block + raw，参数调整后：MAPE 约 `0.137534`
 - ExtraTrees + global + log：MAPE 约 `0.130091`
 - ExtraTrees + global + log + 观测结构特征 + 天气：MAPE 约 `0.127509`
-- 当前默认 ExtraTrees + global + log + 观测结构特征 + 无天气：MAPE 约 `0.126615`
+- ExtraTrees + global + log + 观测结构特征 + 无天气：MAPE 约 `0.126615`
+- 当前默认 ExtraTrees + global + log + 观测结构特征 + 无天气 + 轻量 MAPE 权重：MAPE 约 `0.124208`
 
 ## 后续方向
 
