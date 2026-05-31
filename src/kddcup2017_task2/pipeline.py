@@ -25,6 +25,9 @@ from .features import FeatureBuilder, Vectorizer
 from .model import make_regressor, mape
 
 
+DEFAULT_DROP_FEATURES = ("obs_max", "obs_last", "veh_type_0_obs_sum")
+
+
 def group_key(row, group: str):
     if group == "global":
         return ("global",)
@@ -54,6 +57,7 @@ def train_and_predict(
     target_transform,
     include_weather,
     sample_weight_power,
+    drop_features=(),
 ):
     train_rows = make_target_rows(train_days, combos)
     y_train = np.array([target_volume(train_agg, row) for row in train_rows], dtype=float)
@@ -62,6 +66,9 @@ def train_and_predict(
     builder.fit_stats(train_rows)
     train_features = builder.transform(train_rows, train_agg, train_attr_agg)
     pred_features = builder.transform(pred_rows, known_agg, known_attr_agg)
+    if drop_features:
+        train_features = filter_features(train_features, drop_features)
+        pred_features = filter_features(pred_features, drop_features)
 
     preds = np.zeros(len(pred_rows), dtype=float)
     artifacts = []
@@ -94,6 +101,11 @@ def train_and_predict(
     return pred_rows, preds, artifacts, builder
 
 
+def filter_features(rows, drop_features):
+    drop = set(drop_features)
+    return [{name: value for name, value in row.items() if name not in drop} for row in rows]
+
+
 def validate(args) -> None:
     paths = project_paths(args.data_dir)
     train1 = read_volume_aggregate([paths["train1_volume"]])
@@ -124,6 +136,7 @@ def validate(args) -> None:
         args.target_transform,
         args.use_weather,
         args.sample_weight_power,
+        DEFAULT_DROP_FEATURES if args.prune_features else (),
     )
     actual = np.array([target_volume(train2, row) for row in rows], dtype=float)
     score = mape(actual, preds)
@@ -132,6 +145,7 @@ def validate(args) -> None:
     print(f"target_transform={args.target_transform}")
     print(f"use_weather={args.use_weather}")
     print(f"sample_weight_power={args.sample_weight_power}")
+    print(f"prune_features={args.prune_features}")
     print(f"validation_rows={len(rows)}")
     print(f"validation_mape={score:.6f}")
     print(f"actual_mean={actual.mean():.3f}")
@@ -176,6 +190,7 @@ def predict(args) -> None:
         args.target_transform,
         args.use_weather,
         args.sample_weight_power,
+        DEFAULT_DROP_FEATURES if args.prune_features else (),
     )
     write_submission(args.output, rows, preds)
     print(f"model={args.model}")
@@ -183,6 +198,7 @@ def predict(args) -> None:
     print(f"target_transform={args.target_transform}")
     print(f"use_weather={args.use_weather}")
     print(f"sample_weight_power={args.sample_weight_power}")
+    print(f"prune_features={args.prune_features}")
     print(f"train_rows={len(train_days) * len(combos) * 12}")
     print(f"prediction_rows={len(rows)}")
     print(f"submission={args.output}")
@@ -200,6 +216,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--target-transform", choices=["log", "raw"], default="log")
     parser.add_argument("--use-weather", action="store_true", help="include weather features; off by default")
     parser.add_argument("--sample-weight-power", type=float, default=0.3)
+    parser.add_argument("--no-prune-features", dest="prune_features", action="store_false")
+    parser.set_defaults(prune_features=True)
     parser.add_argument("--alpha", type=float, default=20.0)
     sub = parser.add_subparsers(dest="command")
 

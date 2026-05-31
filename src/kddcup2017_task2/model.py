@@ -68,7 +68,7 @@ def make_regressor(name: str, alpha: float = 20.0, random_state: int = 42):
         return NonNegativeRegressor(
             ExtraTreesRegressor(
                 n_estimators=600,
-                max_depth=None,
+                max_depth=12,
                 min_samples_leaf=12,
                 random_state=random_state,
                 n_jobs=-1,

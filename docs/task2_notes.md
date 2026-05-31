@@ -41,6 +41,7 @@ python run_task2.py predict
 - 观测窗口结构特征：车型、ETC、车辆类型的 2 小时汇总计数和占比
 - 天气特征：默认关闭，可用 `--use-weather` 启用
 - 样本权重：默认 `--sample-weight-power 0.3`，轻微提高低流量样本权重以贴近 MAPE
+- 特征剪枝：默认去掉 `obs_max`、`obs_last`、`veh_type_0_obs_sum`，可用 `--no-prune-features` 关闭
 - 提交文件：`outputs/submission_task2_volume.csv`
 
 ## 已完成
@@ -68,7 +69,8 @@ phase1 离线验证方式：
 - ExtraTrees + global + log：MAPE 约 `0.130091`
 - ExtraTrees + global + log + 观测结构特征 + 天气：MAPE 约 `0.127509`
 - ExtraTrees + global + log + 观测结构特征 + 无天气：MAPE 约 `0.126615`
-- 当前默认 ExtraTrees + global + log + 观测结构特征 + 无天气 + 轻量 MAPE 权重：MAPE 约 `0.124208`
+- ExtraTrees + global + log + 观测结构特征 + 无天气 + 轻量 MAPE 权重：MAPE 约 `0.124208`
+- 当前默认 ExtraTrees + global + log + 观测结构特征 + 无天气 + 轻量 MAPE 权重 + 剪枝噪声特征：MAPE 约 `0.122250`
 
 ## 后续方向
 

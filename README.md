@@ -42,6 +42,7 @@ python run_task2.py --model extra validate
 python run_task2.py --group block --target-transform raw validate
 python run_task2.py --use-weather validate
 python run_task2.py --sample-weight-power 0 validate
+python run_task2.py --no-prune-features validate
 ```
 
 输出：
@@ -53,7 +54,8 @@ python run_task2.py --sample-weight-power 0 validate
 
 - 训练：`2016-09-19` 至 `2016-10-17`
 - 验证：用 phase1 test 观测窗口预测 `2016-10-18` 至 `2016-10-24`
-- 默认 `extra + global + log + 观测结构特征 + 无天气 + 轻量 MAPE 权重` 验证 MAPE：约 `0.124208`
+- 默认 `extra + global + log + 观测结构特征 + 无天气 + 轻量 MAPE 权重 + 剪枝噪声特征` 验证 MAPE：约 `0.122250`
+- `extra + global + log + 观测结构特征 + 无天气 + 轻量 MAPE 权重 + 不剪枝` 验证 MAPE：约 `0.124342`
 - `extra + global + log + 观测结构特征 + 无天气 + 无权重` 验证 MAPE：约 `0.128240`
 - `extra + global + log + 观测结构特征 + 天气 + 轻量 MAPE 权重` 验证 MAPE：约 `0.125849`
 - `extra + block + raw` 验证 MAPE：约 `0.137534`
