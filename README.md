@@ -40,6 +40,7 @@ python run_task2.py --model lgbm validate
 python run_task2.py --model hgb validate
 python run_task2.py --model extra validate
 python run_task2.py --group block --target-transform raw validate
+python run_task2.py --use-weather validate
 ```
 
 输出：
@@ -51,7 +52,8 @@ python run_task2.py --group block --target-transform raw validate
 
 - 训练：`2016-09-19` 至 `2016-10-17`
 - 验证：用 phase1 test 观测窗口预测 `2016-10-18` 至 `2016-10-24`
-- 默认 `extra + global + log` 验证 MAPE：约 `0.130091`
+- 默认 `extra + global + log + 观测结构特征 + 无天气` 验证 MAPE：约 `0.126615`
+- `extra + global + log + 观测结构特征 + 天气` 验证 MAPE：约 `0.127509`
 - `extra + block + raw` 验证 MAPE：约 `0.137534`
 - `lgbm + global + log` 验证 MAPE：约 `0.147154`
 - `ridge + global + raw` 验证 MAPE：约 `0.196292`
@@ -61,7 +63,7 @@ python run_task2.py --group block --target-transform raw validate
 ## 架构
 
 - `src/kddcup2017_task2/data.py`：CSV 读取、20 分钟聚合、目标窗口、提交文件生成
-- `src/kddcup2017_task2/features.py`：日历、天气、观测窗口、历史统计特征
+- `src/kddcup2017_task2/features.py`：日历、可选天气、观测窗口、车型/ETC 结构、历史统计特征
 - `src/kddcup2017_task2/model.py`：模型工厂、岭回归 fallback、树模型和 MAPE
 - `src/kddcup2017_task2/pipeline.py`：`validate` / `predict` 流程
 

@@ -12,6 +12,7 @@ from typing import Dict, Iterable, List, Mapping, Sequence, Tuple
 
 Combo = Tuple[str, str]
 WindowKey = Tuple[datetime, str, str]
+AttrKey = Tuple[datetime, str, str, str, str]
 
 TARGET_TIMES = (
     time(8, 0),
@@ -104,8 +105,36 @@ def read_volume_aggregate(paths: Iterable[Path]) -> Dict[WindowKey, int]:
     return dict(volumes)
 
 
+def read_volume_attr_aggregate(paths: Iterable[Path]) -> Dict[AttrKey, int]:
+    attrs: Dict[AttrKey, int] = defaultdict(int)
+    for path in paths:
+        with path.open(newline="") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                dt_value = row.get("time") or row.get("date_time")
+                tollgate = str(row.get("tollgate_id") or row.get("tollgate"))
+                direction = str(row["direction"])
+                start = floor_20min(parse_dt(dt_value))
+                values = {
+                    "model": row.get("vehicle_model") or row.get("model") or "",
+                    "etc": row.get("has_etc") or row.get("is_etc") or "",
+                    "veh_type": row.get("vehicle_type") or row.get("veh_type") or "blank",
+                }
+                for attr_name, attr_value in values.items():
+                    attrs[(start, tollgate, direction, attr_name, attr_value)] += 1
+    return dict(attrs)
+
+
 def merge_aggregates(*aggregates: Mapping[WindowKey, int]) -> Dict[WindowKey, int]:
     merged: Dict[WindowKey, int] = defaultdict(int)
+    for aggregate in aggregates:
+        for key, value in aggregate.items():
+            merged[key] += value
+    return dict(merged)
+
+
+def merge_attr_aggregates(*aggregates: Mapping[AttrKey, int]) -> Dict[AttrKey, int]:
+    merged: Dict[AttrKey, int] = defaultdict(int)
     for aggregate in aggregates:
         for key, value in aggregate.items():
             merged[key] += value

@@ -13,8 +13,10 @@ from .data import (
     make_target_rows,
     make_target_rows_like_sample,
     merge_aggregates,
+    merge_attr_aggregates,
     project_paths,
     read_sample_shape,
+    read_volume_attr_aggregate,
     read_volume_aggregate,
     target_volume,
     write_submission,
@@ -41,6 +43,8 @@ def train_and_predict(
     train_agg,
     known_agg,
     weather,
+    train_attr_agg,
+    known_attr_agg,
     train_days,
     pred_rows,
     combos,
@@ -48,14 +52,15 @@ def train_and_predict(
     alpha,
     group,
     target_transform,
+    include_weather,
 ):
     train_rows = make_target_rows(train_days, combos)
     y_train = np.array([target_volume(train_agg, row) for row in train_rows], dtype=float)
 
-    builder = FeatureBuilder(train_agg, weather)
+    builder = FeatureBuilder(train_agg, weather, include_weather=include_weather)
     builder.fit_stats(train_rows)
-    train_features = builder.transform(train_rows, train_agg)
-    pred_features = builder.transform(pred_rows, known_agg)
+    train_features = builder.transform(train_rows, train_agg, train_attr_agg)
+    pred_features = builder.transform(pred_rows, known_agg, known_attr_agg)
 
     preds = np.zeros(len(pred_rows), dtype=float)
     artifacts = []
@@ -88,7 +93,10 @@ def validate(args) -> None:
     train1 = read_volume_aggregate([paths["train1_volume"]])
     train2 = read_volume_aggregate([paths["train2_volume"]])
     test1_obs = read_volume_aggregate([paths["test1_volume"]])
+    train1_attr = read_volume_attr_aggregate([paths["train1_volume"]])
+    test1_attr = read_volume_attr_aggregate([paths["test1_volume"]])
     known = merge_aggregates(train1, test1_obs)
+    known_attr = merge_attr_aggregates(train1_attr, test1_attr)
     weather = load_weather([paths["weather_train"], paths["weather_train_orig"], paths["weather_phase1"]])
     combos = infer_combos(train1)
     train_days = infer_dates(train1)
@@ -99,6 +107,8 @@ def validate(args) -> None:
         train1,
         known,
         weather,
+        train1_attr,
+        known_attr,
         train_days,
         valid_rows,
         combos,
@@ -106,12 +116,14 @@ def validate(args) -> None:
         args.alpha,
         args.group,
         args.target_transform,
+        args.use_weather,
     )
     actual = np.array([target_volume(train2, row) for row in rows], dtype=float)
     score = mape(actual, preds)
     print(f"model={args.model}")
     print(f"group={args.group}")
     print(f"target_transform={args.target_transform}")
+    print(f"use_weather={args.use_weather}")
     print(f"validation_rows={len(rows)}")
     print(f"validation_mape={score:.6f}")
     print(f"actual_mean={actual.mean():.3f}")
@@ -127,8 +139,13 @@ def predict(args) -> None:
     train1 = read_volume_aggregate([paths["train1_volume"]])
     train2 = read_volume_aggregate([paths["train2_volume"]])
     test2_obs = read_volume_aggregate([paths["test2_volume"]])
+    train1_attr = read_volume_attr_aggregate([paths["train1_volume"]])
+    train2_attr = read_volume_attr_aggregate([paths["train2_volume"]])
+    test2_attr = read_volume_attr_aggregate([paths["test2_volume"]])
     train_all = merge_aggregates(train1, train2)
     known = merge_aggregates(train_all, test2_obs)
+    train_all_attr = merge_attr_aggregates(train1_attr, train2_attr)
+    known_attr = merge_attr_aggregates(train_all_attr, test2_attr)
     weather = load_weather([paths["weather_train"], paths["weather_train_orig"], paths["weather_phase2"]])
     _, sample_combos = read_sample_shape(paths["sample_volume"])
     combos = sample_combos or infer_combos(train_all)
@@ -140,6 +157,8 @@ def predict(args) -> None:
         train_all,
         known,
         weather,
+        train_all_attr,
+        known_attr,
         train_days,
         pred_rows,
         combos,
@@ -147,11 +166,13 @@ def predict(args) -> None:
         args.alpha,
         args.group,
         args.target_transform,
+        args.use_weather,
     )
     write_submission(args.output, rows, preds)
     print(f"model={args.model}")
     print(f"group={args.group}")
     print(f"target_transform={args.target_transform}")
+    print(f"use_weather={args.use_weather}")
     print(f"train_rows={len(train_days) * len(combos) * 12}")
     print(f"prediction_rows={len(rows)}")
     print(f"submission={args.output}")
@@ -167,6 +188,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         default="global",
     )
     parser.add_argument("--target-transform", choices=["log", "raw"], default="log")
+    parser.add_argument("--use-weather", action="store_true", help="include weather features; off by default")
     parser.add_argument("--alpha", type=float, default=20.0)
     sub = parser.add_subparsers(dest="command")
 
