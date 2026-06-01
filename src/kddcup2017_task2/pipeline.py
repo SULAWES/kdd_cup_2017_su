@@ -315,6 +315,18 @@ def predict(args) -> None:
     print(f"submission={args.output}")
 
 
+def validate_ensemble(args) -> None:
+    from .ensemble import validate_latest_fold_ensemble
+
+    validate_latest_fold_ensemble(args)
+
+
+def predict_ensemble(args) -> None:
+    from .ensemble import predict_phase2_ensemble
+
+    predict_phase2_ensemble(args)
+
+
 def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="KDD Cup 2017 Task 2 baseline pipeline")
     parser.add_argument("--data-dir", type=Path, default=Path("dataset"))
@@ -341,6 +353,24 @@ def main(argv: Sequence[str] | None = None) -> None:
     pred = sub.add_parser("predict", help="train on all released training data and predict phase2")
     pred.add_argument("--output", type=Path, default=Path("outputs/submission_task2_volume.csv"))
     pred.set_defaults(func=predict)
+
+    valid_ensemble = sub.add_parser(
+        "validate-ensemble",
+        help="calibrate four-model ensemble on the latest training fold, then validate on phase1",
+    )
+    valid_ensemble.add_argument(
+        "--validation-output",
+        type=Path,
+        default=Path("outputs/validation_phase1_ensemble_pred.csv"),
+    )
+    valid_ensemble.set_defaults(func=validate_ensemble)
+
+    pred_ensemble = sub.add_parser(
+        "predict-ensemble",
+        help="legally calibrate four-model ensemble on released phase2 training labels and predict phase2",
+    )
+    pred_ensemble.add_argument("--output", type=Path, default=Path("outputs/submission_task2_volume_ensemble.csv"))
+    pred_ensemble.set_defaults(func=predict_ensemble)
 
     args = parser.parse_args(argv)
     if not args.command:

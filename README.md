@@ -30,6 +30,8 @@ Task 2 的提交格式为 420 行：
 ```sh
 python run_task2.py validate
 python run_task2.py predict
+python run_task2.py validate-ensemble
+python run_task2.py predict-ensemble
 ```
 
 可切换模型：
@@ -60,6 +62,9 @@ python run_task2.py --no-prune-features validate
   - 本版在 ExtraTrees 默认超参 `random_state=13, max_depth=14, min_samples_leaf=10` 基础上，增加 recent-low-volume 结构切换：若某 combo 最近 7 天均值同时低于最近整体均值和自身全历史均值的 60%，则该 combo 使用 block 模型，其余使用 global 模型。phase1 和 phase2 训练数据下均只选择 `1_0`。
   - 单纯 `--group global` 为约 `0.120773`；旧默认约 `0.122050`。
 - `--history-blend 0.09` 可在 phase1 验证上得到约 `0.119564`，但该权重来自 phase1 验证周调参；训练期滚动周没有支持把它作为默认配置。
+- 四模型融合命令：
+  - `validate-ensemble`：只用训练期最后一周校准融合权重，再评估 phase1，MAPE 约 `0.118018`，不使用 phase1 验证标签调权。
+  - `predict-ensemble`：用已发布的 Oct.18-24 标签校准权重，再预测 Oct.25-31；校准 MAPE 约 `0.116116`，该数合法用于 phase2 权重估计，但不能当作无泄露 phase1 验证分数。
 - 递推使用前序目标窗预测、trajectory 绿窗统计、天气特征、分组建模和恢复已剪枝特征均已复测，当前默认下没有带来叠加收益。
 - 旧实验 `--history-blend 0.195 --prediction-scale 0.962 --sample-weight-power 0.22` 在旧模型上可得到约 `0.117796`，但这组参数来自该验证集调参，不能作为无泄露默认配置。
 - `extra + global + log + 观测结构特征 + 无天气 + 轻量 MAPE 权重 + 不剪枝` 验证 MAPE：约 `0.124342`
