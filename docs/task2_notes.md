@@ -98,6 +98,16 @@ phase1 离线验证方式：
 
 本轮泄露检查结论：训练/预测特征构造本身没有直接读取验证目标窗口标签；测试日 06:00-08:00、15:00-17:00 观测窗口是题目允许输入。但上一版把在 `2016-10-18` 至 `2016-10-24` 验证标签上调优得到的 `history_blend`、`prediction_scale` 写成默认值，属于验证集信息泄露/过拟合风险，已改为默认关闭。
 
+## 路线文档
+
+几个表现较好的路线已拆成独立说明：
+
+- [ExtraTrees global 稳定基线](route_extra_global.md)
+- [recent-low-volume block 结构切换](route_low_volume_block.md)
+- [四模型融合](route_four_model_ensemble.md)
+- [history_blend 后处理上界实验](route_history_blend.md)
+- [路线总览](routes_overview.md)
+
 ## 后续方向
 
 优先考虑这些提升：
