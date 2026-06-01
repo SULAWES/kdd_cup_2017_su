@@ -79,6 +79,48 @@ def train_and_predict(
     sample_weight_power,
     drop_features=(),
 ):
+    if group == "low_volume_block":
+        low_volume_combos = select_low_volume_combos(train_agg, train_days, combos)
+        rows, global_preds, _, builder = train_and_predict(
+            train_agg,
+            known_agg,
+            weather,
+            train_attr_agg,
+            known_attr_agg,
+            train_days,
+            pred_rows,
+            combos,
+            model_name,
+            alpha,
+            "global",
+            target_transform,
+            include_weather,
+            sample_weight_power,
+            drop_features,
+        )
+        _, block_preds, _, _ = train_and_predict(
+            train_agg,
+            known_agg,
+            weather,
+            train_attr_agg,
+            known_attr_agg,
+            train_days,
+            pred_rows,
+            combos,
+            model_name,
+            alpha,
+            "block",
+            target_transform,
+            include_weather,
+            sample_weight_power,
+            drop_features,
+        )
+        preds = global_preds.copy()
+        for idx, row in enumerate(rows):
+            if row.combo in low_volume_combos:
+                preds[idx] = block_preds[idx]
+        return rows, preds, [("low_volume_block", tuple(sorted(low_volume_combos)))], builder
+
     train_rows = make_target_rows(train_days, combos)
     y_train = np.array([target_volume(train_agg, row) for row in train_rows], dtype=float)
 
@@ -119,6 +161,36 @@ def train_and_predict(
         preds[pred_idx] = np.maximum(group_preds, 0.0)
         artifacts.append((key, model, vectorizer))
     return pred_rows, preds, artifacts, builder
+
+
+def select_low_volume_combos(train_agg, train_days, combos, ratio: float = 0.6):
+    rows = make_target_rows(train_days, combos)
+    if not rows:
+        return set()
+    latest_day = max(train_days)
+    recent_start = latest_day - timedelta(days=6)
+    recent_days = [day for day in train_days if recent_start <= day <= latest_day]
+    recent_rows = make_target_rows(recent_days, combos)
+    recent_values = np.array([target_volume(train_agg, row) for row in recent_rows], dtype=float)
+    recent_global_mean = float(np.mean(recent_values)) if len(recent_values) else 0.0
+    selected = set()
+    for combo in combos:
+        combo_values = [target_volume(train_agg, row) for row in rows if row.combo == combo]
+        recent_combo_values = [
+            target_volume(train_agg, row)
+            for row in recent_rows
+            if row.combo == combo
+        ]
+        if not combo_values or not recent_combo_values:
+            continue
+        combo_mean = float(np.mean(combo_values))
+        recent_combo_mean = float(np.mean(recent_combo_values))
+        if (
+            recent_combo_mean <= recent_global_mean * ratio
+            and recent_combo_mean <= combo_mean * ratio
+        ):
+            selected.add(combo)
+    return selected
 
 
 def filter_features(rows, drop_features):
@@ -249,8 +321,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--model", choices=["extra", "lgbm", "hgb", "ridge"], default="extra")
     parser.add_argument(
         "--group",
-        choices=["global", "block", "combo", "combo_block", "combo_slot"],
-        default="global",
+        choices=["global", "block", "combo", "combo_block", "combo_slot", "low_volume_block"],
+        default="low_volume_block",
     )
     parser.add_argument("--target-transform", choices=["log", "raw"], default="log")
     parser.add_argument("--use-weather", action="store_true", help="include weather features; off by default")

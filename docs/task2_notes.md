@@ -37,7 +37,8 @@ python run_task2.py predict
 
 - 模型：`ExtraTreesRegressor`
   - 默认超参已调为 `random_state=13, max_depth=14, min_samples_leaf=10`
-- 分组：`global`
+- 分组：`low_volume_block`
+  - 默认先训练 global 和 block 两个模型；若某 combo 最近 7 天均值同时低于最近整体均值和自身全历史均值的 60%，则该 combo 使用 block 预测，其余使用 global 预测。
 - 目标变换：`log1p(volume)`，预测后用 `expm1` 还原
 - 观测窗口结构特征：车型、ETC、车辆类型的 2 小时汇总计数和占比
 - 天气特征：默认关闭，可用 `--use-weather` 启用
@@ -52,7 +53,7 @@ python run_task2.py predict
 2. 修复提交顺序问题：预测阶段按 `submission_sample_volume.csv` 的行顺序生成目标行，只平移日期，避免位置式评分错配。
 3. 加入可切换模型和实验参数：
    - `--model extra|lgbm|hgb|ridge`
-   - `--group global|block|combo|combo_block|combo_slot`
+   - `--group global|block|combo|combo_block|combo_slot|low_volume_block`
    - `--target-transform log|raw`
 4. 初始化 Git 仓库并提交 baseline 代码。
 
@@ -75,8 +76,11 @@ phase1 离线验证方式：
 - ExtraTrees + global + log + 观测结构特征 + 无天气 + 轻量 MAPE 权重 + 剪枝噪声特征：MAPE 约 `0.122250`
 - 上一版默认 ExtraTrees + global + log + 观测结构特征 + 无天气 + 轻量 MAPE 权重 + 剪枝噪声特征（保留 `obs_std`）：MAPE 约 `0.122050`
   - `obs_std` 由同日已给出的 06:00-08:00 / 15:00-17:00 观测窗口计算，不读取目标窗口标签。用训练期内滚动周检查时也优于继续剪枝：`2016-10-11` 折 `0.149291 -> 0.148119`，`2016-10-04` 折 `0.250073 -> 0.244111`，`2016-09-27` 折 `2.814915 -> 2.695256`。
-- 当前默认 ExtraTrees + global + log + 观测结构特征 + 无天气 + 轻量 MAPE 权重 + 剪枝噪声特征 + 调整树深/叶子大小/随机种子：MAPE 约 `0.120773`
+- 调参后 ExtraTrees + global + log + 观测结构特征 + 无天气 + 轻量 MAPE 权重 + 剪枝噪声特征 + 调整树深/叶子大小/随机种子：MAPE 约 `0.120773`
   - 训练期滚动周同样优于旧默认：`2016-09-27` 折 `2.694666 -> 2.636691`，`2016-10-04` 折 `0.244101 -> 0.235495`，`2016-10-11` 折 `0.148278 -> 0.147794`。
+- 当前默认 ExtraTrees + low_volume_block + log + 观测结构特征 + 无天气 + 轻量 MAPE 权重 + 剪枝噪声特征：MAPE 约 `0.120175`
+  - 该方法不使用 phase1 验证标签选择 combo；只由训练数据最近 7 天均值触发。phase1 训练数据和 phase2 全训练数据下均只选择 `1_0`。
+  - 训练期滚动折中，低位 regime 出现前该规则不触发，因此与 global 分数一致；在 Oct.11-17 已知低位后预测 Oct.18-24 时触发。
 - 显式实验 `--history-blend 0.09`：MAPE 约 `0.119564`，但训练期滚动周没有支持把该 blend 写入默认值。
 - 已复测但未采纳：递推使用前序目标窗预测、trajectory 绿窗统计、天气特征、分组建模、恢复剪枝特征，均未优于当前默认。
 - 旧显式实验 `--sample-weight-power 0.22 --history-blend 0.195 --prediction-scale 0.962`：MAPE 约 `0.117796`，但该结果使用 phase1 验证标签选择后处理权重和全局缩放，不能视作无泄露提升。

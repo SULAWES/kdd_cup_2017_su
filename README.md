@@ -39,6 +39,7 @@ python run_task2.py --model ridge validate
 python run_task2.py --model lgbm validate
 python run_task2.py --model hgb validate
 python run_task2.py --model extra validate
+python run_task2.py --group global validate
 python run_task2.py --group block --target-transform raw validate
 python run_task2.py --use-weather validate
 python run_task2.py --sample-weight-power 0 validate
@@ -55,8 +56,9 @@ python run_task2.py --no-prune-features validate
 
 - 训练：`2016-09-19` 至 `2016-10-17`
 - 验证：用 phase1 test 观测窗口预测 `2016-10-18` 至 `2016-10-24`
-- 默认 `extra + global + log + 观测结构特征（保留观测窗口波动 obs_std）+ 无天气 + 轻量 MAPE 权重 + 剪枝噪声特征` 验证 MAPE：约 `0.120773`
-  - 本版只调整 ExtraTrees 默认超参：`random_state=13, max_depth=14, min_samples_leaf=10`。训练期滚动周也优于旧默认，旧默认约 `0.122050`。
+- 默认 `extra + low_volume_block + log + 观测结构特征（保留观测窗口波动 obs_std）+ 无天气 + 轻量 MAPE 权重 + 剪枝噪声特征` 验证 MAPE：约 `0.120175`
+  - 本版在 ExtraTrees 默认超参 `random_state=13, max_depth=14, min_samples_leaf=10` 基础上，增加 recent-low-volume 结构切换：若某 combo 最近 7 天均值同时低于最近整体均值和自身全历史均值的 60%，则该 combo 使用 block 模型，其余使用 global 模型。phase1 和 phase2 训练数据下均只选择 `1_0`。
+  - 单纯 `--group global` 为约 `0.120773`；旧默认约 `0.122050`。
 - `--history-blend 0.09` 可在 phase1 验证上得到约 `0.119564`，但该权重来自 phase1 验证周调参；训练期滚动周没有支持把它作为默认配置。
 - 递推使用前序目标窗预测、trajectory 绿窗统计、天气特征、分组建模和恢复已剪枝特征均已复测，当前默认下没有带来叠加收益。
 - 旧实验 `--history-blend 0.195 --prediction-scale 0.962 --sample-weight-power 0.22` 在旧模型上可得到约 `0.117796`，但这组参数来自该验证集调参，不能作为无泄露默认配置。
