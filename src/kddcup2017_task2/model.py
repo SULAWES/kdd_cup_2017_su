@@ -58,7 +58,7 @@ class NonNegativeRegressor:
             return np.maximum(self.estimator.predict(x), 0.0)
 
 
-def make_regressor(name: str, alpha: float = 20.0, random_state: int = 42):
+def make_regressor(name: str, alpha: float = 20.0, random_state: int = 13):
     name = name.lower()
     if name == "ridge":
         return RidgeRegressor(alpha=alpha)
@@ -68,8 +68,8 @@ def make_regressor(name: str, alpha: float = 20.0, random_state: int = 42):
         return NonNegativeRegressor(
             ExtraTreesRegressor(
                 n_estimators=600,
-                max_depth=12,
-                min_samples_leaf=12,
+                max_depth=14,
+                min_samples_leaf=10,
                 random_state=random_state,
                 n_jobs=-1,
             )
