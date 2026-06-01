@@ -23,20 +23,37 @@ class FeatureBuilder:
         self.global_mean = 1.0
         self.combo_mean: Dict[tuple, float] = {}
         self.combo_slot_mean: Dict[tuple, float] = {}
+        self.combo_slot_median: Dict[tuple, float] = {}
+        self.combo_slot_dow_mean: Dict[tuple, float] = {}
+        self.combo_block_mean: Dict[tuple, float] = {}
+        self.combo_slot_obs_ratio: Dict[tuple, float] = {}
 
     def fit_stats(self, rows: Sequence[TargetRow]) -> None:
         values = []
         by_combo = defaultdict(list)
         by_combo_slot = defaultdict(list)
+        by_combo_slot_dow = defaultdict(list)
+        by_combo_block = defaultdict(list)
+        by_combo_slot_ratio = defaultdict(list)
         for row in rows:
             y = target_volume(self.train_aggregate, row)
             values.append(y)
             slot = self._target_slot(row.start)
+            block = block_name(row.start)
             by_combo[row.combo].append(y)
             by_combo_slot[(row.combo, slot)].append(y)
+            by_combo_slot_dow[(row.combo, slot, row.start.weekday())].append(y)
+            by_combo_block[(row.combo, block)].append(y)
+            obs_sum = self._obs_sum(self.train_aggregate, row)
+            if obs_sum > 0:
+                by_combo_slot_ratio[(row.combo, slot)].append(y / obs_sum)
         self.global_mean = sum(values) / len(values) if values else 1.0
         self.combo_mean = {key: sum(items) / len(items) for key, items in by_combo.items()}
         self.combo_slot_mean = {key: sum(items) / len(items) for key, items in by_combo_slot.items()}
+        self.combo_slot_median = {key: self._median(items) for key, items in by_combo_slot.items()}
+        self.combo_slot_dow_mean = {key: sum(items) / len(items) for key, items in by_combo_slot_dow.items()}
+        self.combo_block_mean = {key: sum(items) / len(items) for key, items in by_combo_block.items()}
+        self.combo_slot_obs_ratio = {key: self._median(items) for key, items in by_combo_slot_ratio.items()}
 
     def transform_row(
         self,
@@ -73,6 +90,11 @@ class FeatureBuilder:
         features["obs_max"] = max(obs_values) if obs_values else 0.0
         features["obs_last"] = obs_values[-1] if obs_values else 0.0
         features["obs_trend"] = (obs_values[-1] - obs_values[0]) if obs_values else 0.0
+        features["obs_first"] = obs_values[0] if obs_values else 0.0
+        features["obs_std"] = self._std(obs_values)
+        features["obs_last_first_ratio"] = (
+            (obs_values[-1] + 1.0) / (obs_values[0] + 1.0) if obs_values else 1.0
+        )
         if attr_aggregate:
             self._add_attr_features(features, row, attr_aggregate)
 
@@ -80,10 +102,23 @@ class FeatureBuilder:
         lag_7 = self._history_value(known_aggregate, row, 7)
         combo_mean = self.combo_mean.get(combo, self.global_mean)
         combo_slot_mean = self.combo_slot_mean.get((combo, slot), combo_mean)
+        combo_slot_median = self.combo_slot_median.get((combo, slot), combo_slot_mean)
+        combo_slot_dow_mean = self.combo_slot_dow_mean.get((combo, slot, row.start.weekday()), combo_slot_mean)
+        combo_block_mean = self.combo_block_mean.get((combo, block), combo_mean)
+        obs_ratio = self.combo_slot_obs_ratio.get(
+            (combo, slot),
+            combo_slot_mean / max(self._obs_sum(self.train_aggregate, row), 1.0),
+        )
         features["lag_1"] = lag_1 if lag_1 is not None else combo_slot_mean
         features["lag_7"] = lag_7 if lag_7 is not None else combo_slot_mean
         features["combo_mean"] = combo_mean
         features["combo_slot_mean"] = combo_slot_mean
+        features["combo_slot_median"] = combo_slot_median
+        features["combo_slot_dow_mean"] = combo_slot_dow_mean
+        features["combo_block_mean"] = combo_block_mean
+        features["obs_ratio_pred"] = features["obs_sum"] * obs_ratio
+        self._add_rolling_features(features, row, known_aggregate, combo_slot_mean)
+        self._add_holiday_features(features, row)
 
         if self.include_weather:
             for key, value in weather_at(self.weather, row.start).items():
@@ -102,6 +137,61 @@ class FeatureBuilder:
     @staticmethod
     def _target_slot(start) -> str:
         return f"{start.hour:02d}:{start.minute:02d}"
+
+    def _add_rolling_features(
+        self,
+        features: Dict[str, float],
+        row: TargetRow,
+        known_aggregate: Mapping[WindowKey, int],
+        fallback: float,
+    ) -> None:
+        for window in (3, 7, 14):
+            values = []
+            for days_back in range(1, window + 1):
+                value = self._history_value(known_aggregate, row, days_back)
+                if value is not None:
+                    values.append(value)
+            features[f"hist_mean_{window}"] = sum(values) / len(values) if values else fallback
+            features[f"hist_median_{window}"] = self._median(values) if values else fallback
+
+    @staticmethod
+    def _add_holiday_features(features: Dict[str, float], row: TargetRow) -> None:
+        # China National Day holiday period in the 2016 KDD Cup data.
+        day = row.start.date()
+        features["is_national_day"] = 1.0 if day.month == 10 and 1 <= day.day <= 7 else 0.0
+        features["is_post_holiday"] = 1.0 if day.month == 10 and 8 <= day.day <= 14 else 0.0
+        features["days_since_national_day"] = (
+            float(max(-7, min(21, (day - day.replace(month=10, day=7)).days)))
+            if day.month in (9, 10)
+            else 0.0
+        )
+
+    @staticmethod
+    def _obs_sum(aggregate: Mapping[WindowKey, int], row: TargetRow) -> float:
+        block = block_name(row.start)
+        return float(
+            sum(
+                aggregate.get((combine_date_time(row.start.date(), clock), row.tollgate_id, row.direction), 0)
+                for clock in OBS_TIMES[block]
+            )
+        )
+
+    @staticmethod
+    def _median(values) -> float:
+        if not values:
+            return 0.0
+        items = sorted(float(value) for value in values)
+        mid = len(items) // 2
+        if len(items) % 2:
+            return items[mid]
+        return (items[mid - 1] + items[mid]) / 2.0
+
+    @staticmethod
+    def _std(values) -> float:
+        if not values:
+            return 0.0
+        mean = sum(values) / len(values)
+        return math.sqrt(sum((value - mean) ** 2 for value in values) / len(values))
 
     @staticmethod
     def _history_value(known_aggregate: Mapping[WindowKey, int], row: TargetRow, days_back: int):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import timedelta
 from pathlib import Path
 from typing import Sequence
 
@@ -25,7 +26,26 @@ from .features import FeatureBuilder, Vectorizer
 from .model import make_regressor, mape
 
 
-DEFAULT_DROP_FEATURES = ("obs_max", "obs_last", "veh_type_0_obs_sum")
+DEFAULT_DROP_FEATURES = (
+    "obs_max",
+    "obs_last",
+    "veh_type_0_obs_sum",
+    "combo_slot_median",
+    "combo_slot_dow_mean",
+    "combo_block_mean",
+    "hist_mean_3",
+    "hist_median_3",
+    "hist_mean_7",
+    "hist_median_7",
+    "hist_mean_14",
+    "hist_median_14",
+    "is_national_day",
+    "is_post_holiday",
+    "days_since_national_day",
+    "obs_first",
+    "obs_last_first_ratio",
+    "obs_ratio_pred",
+)
 
 
 def group_key(row, group: str):
@@ -106,6 +126,19 @@ def filter_features(rows, drop_features):
     return [{name: value for name, value in row.items() if name not in drop} for row in rows]
 
 
+def apply_history_blend(rows, preds, known_agg, history_blend: float, prediction_scale: float):
+    adjusted = np.asarray(preds, dtype=float).copy()
+    if history_blend > 0:
+        for idx, row in enumerate(rows):
+            lag_start = row.start - timedelta(days=7)
+            lag_value = known_agg.get((lag_start, row.tollgate_id, row.direction))
+            if lag_value is not None:
+                adjusted[idx] = (1.0 - history_blend) * adjusted[idx] + history_blend * float(lag_value)
+    if prediction_scale != 1.0:
+        adjusted *= prediction_scale
+    return np.maximum(adjusted, 0.0)
+
+
 def validate(args) -> None:
     paths = project_paths(args.data_dir)
     train1 = read_volume_aggregate([paths["train1_volume"]])
@@ -138,6 +171,7 @@ def validate(args) -> None:
         args.sample_weight_power,
         DEFAULT_DROP_FEATURES if args.prune_features else (),
     )
+    preds = apply_history_blend(rows, preds, known, args.history_blend, args.prediction_scale)
     actual = np.array([target_volume(train2, row) for row in rows], dtype=float)
     score = mape(actual, preds)
     print(f"model={args.model}")
@@ -145,6 +179,8 @@ def validate(args) -> None:
     print(f"target_transform={args.target_transform}")
     print(f"use_weather={args.use_weather}")
     print(f"sample_weight_power={args.sample_weight_power}")
+    print(f"history_blend={args.history_blend}")
+    print(f"prediction_scale={args.prediction_scale}")
     print(f"prune_features={args.prune_features}")
     print(f"validation_rows={len(rows)}")
     print(f"validation_mape={score:.6f}")
@@ -192,12 +228,15 @@ def predict(args) -> None:
         args.sample_weight_power,
         DEFAULT_DROP_FEATURES if args.prune_features else (),
     )
+    preds = apply_history_blend(rows, preds, known, args.history_blend, args.prediction_scale)
     write_submission(args.output, rows, preds)
     print(f"model={args.model}")
     print(f"group={args.group}")
     print(f"target_transform={args.target_transform}")
     print(f"use_weather={args.use_weather}")
     print(f"sample_weight_power={args.sample_weight_power}")
+    print(f"history_blend={args.history_blend}")
+    print(f"prediction_scale={args.prediction_scale}")
     print(f"prune_features={args.prune_features}")
     print(f"train_rows={len(train_days) * len(combos) * 12}")
     print(f"prediction_rows={len(rows)}")
@@ -216,6 +255,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--target-transform", choices=["log", "raw"], default="log")
     parser.add_argument("--use-weather", action="store_true", help="include weather features; off by default")
     parser.add_argument("--sample-weight-power", type=float, default=0.3)
+    parser.add_argument("--history-blend", type=float, default=0.0)
+    parser.add_argument("--prediction-scale", type=float, default=1.0)
     parser.add_argument("--no-prune-features", dest="prune_features", action="store_false")
     parser.set_defaults(prune_features=True)
     parser.add_argument("--alpha", type=float, default=20.0)
