@@ -42,6 +42,7 @@ python run_task2.py --model extra validate
 python run_task2.py --group block --target-transform raw validate
 python run_task2.py --use-weather validate
 python run_task2.py --sample-weight-power 0 validate
+python run_task2.py --history-blend 0.195 --prediction-scale 0.962 validate
 python run_task2.py --no-prune-features validate
 ```
 
@@ -54,7 +55,8 @@ python run_task2.py --no-prune-features validate
 
 - 训练：`2016-09-19` 至 `2016-10-17`
 - 验证：用 phase1 test 观测窗口预测 `2016-10-18` 至 `2016-10-24`
-- 默认 `extra + global + log + 观测结构特征 + 无天气 + 轻量 MAPE 权重 + 剪枝噪声特征` 验证 MAPE：约 `0.122250`
+- 默认 `extra + global + log + 观测结构特征（保留观测窗口波动 obs_std）+ 无天气 + 轻量 MAPE 权重 + 剪枝噪声特征` 验证 MAPE：约 `0.121918`
+- `--history-blend 0.195 --prediction-scale 0.962 --sample-weight-power 0.22` 可在 phase1 验证上得到约 `0.117796`，但这组参数来自该验证集调参，不能作为无泄露默认配置。
 - `extra + global + log + 观测结构特征 + 无天气 + 轻量 MAPE 权重 + 不剪枝` 验证 MAPE：约 `0.124342`
 - `extra + global + log + 观测结构特征 + 无天气 + 无权重` 验证 MAPE：约 `0.128240`
 - `extra + global + log + 观测结构特征 + 天气 + 轻量 MAPE 权重` 验证 MAPE：约 `0.125849`
@@ -78,6 +80,6 @@ python run_task2.py --no-prune-features validate
 1. 做按 combo 和 target slot 的独立模型，减少不同收费站方向之间的分布干扰。
 2. 增加节假日、调休日、工作日类型，以及国庆后恢复期的特殊标记。
 3. 使用递推预测：对 08:20 之后、17:20 之后的窗口引入前一目标窗口的预测值。
-4. 做多时间尺度统计：过去 3/7/14 天同窗口均值、中位数、分位数、同比/环比变化。
+4. 做更稳健的滚动交叉验证；`history_blend` 和 `prediction_scale` 必须只用训练折拟合，避免把 phase1 验证标签信息固化到默认参数。
 5. 增加模型融合：历史规则模型、岭回归、树模型分别产出结果后加权。
 6. 如果安装 `pandas`，可以增加更方便的离线分析脚本，但核心训练流程不依赖它。
