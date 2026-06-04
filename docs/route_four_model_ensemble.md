@@ -4,6 +4,12 @@
 
 四模型融合把几个误差形态不同的预测器做 convex weighted mean。当前实现位于 `src/kddcup2017_task2/ensemble.py`。
 
+更详细的实现说明见：
+
+- [四模型融合入门说明](sota/four_model_ensemble_getting_started.md)
+- [四模型融合方法详细说明](sota/four_model_ensemble_detailed.md)
+- [四模型融合的数据处理与数据使用说明](sota/four_model_ensemble_data_usage.md)
+
 候选模型：
 
 1. `low_volume_block`

@@ -7,6 +7,12 @@
 3. [四模型融合](route_four_model_ensemble.md)
 4. [history_blend 后处理上界实验](route_history_blend.md)
 
+四模型融合的展开说明：
+
+- [四模型融合入门说明](sota/four_model_ensemble_getting_started.md)
+- [四模型融合方法详细说明](sota/four_model_ensemble_detailed.md)
+- [四模型融合的数据处理与数据使用说明](sota/four_model_ensemble_data_usage.md)
+
 ## 分数对比
 
 | 路线 | phase1 MAPE | 泄露状态 | 当前建议 |
