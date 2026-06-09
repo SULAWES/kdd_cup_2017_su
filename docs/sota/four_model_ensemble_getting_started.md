@@ -14,6 +14,463 @@
 
 上一版 SOTA 是同样四个模型加一组全局融合权重，phase1 MAPE 为 `0.118018`。当前版本不换数据、不换标签边界，只把融合权重细分为 `08`, `09`, `17`, `18` 四个目标小时，phase1 MAPE 提升到 `0.116167`。
 
+## 从审题到当前方案的完整路线
+
+这一节按当前代码说明项目是怎么一步步做出来的。核心依据是 `problem.md`、`src/kddcup2017_task2/` 的实现和 `outputs/experiments/` 中的实验输出，不以后写的说明文档反推。
+
+### 1. 审题：先把比赛问题变成监督学习问题
+
+题目要求预测 Task 2 的 tollgate traffic volume。读题后先确定四件事：
+
+| 问题 | 代码中的对应 |
+| --- | --- |
+| 预测对象是什么 | `TargetRow(tollgate_id, direction, start)` |
+| 预测哪些组合 | `1_0`, `1_1`, `2_0`, `3_0`, `3_1` |
+| 预测哪些窗口 | `TARGET_TIMES` 中的 12 个红窗 |
+| 可以使用哪些输入 | 训练历史 + 同日绿窗 + 更早历史 |
+
+因此一行训练样本不是原始 CSV 的一行车辆记录，而是：
+
+```text
+一个 tollgate-direction combo 在某一天某个 20 分钟红窗的流量
+```
+
+例如：
+
+```text
+TargetRow(tollgate_id=1, direction=0, start=2016-10-25 08:40:00)
+```
+
+表示预测 `1_0` 在 `2016-10-25 08:40-09:00` 的 traffic volume。
+
+题目中最容易误读的是测试集。测试 volume 文件不是答案文件，它只给出当天绿窗：
+
+```text
+06:00-08:00
+15:00-17:00
+```
+
+这些绿窗是合法输入。真正要预测的红窗是：
+
+```text
+08:00-10:00
+17:00-19:00
+```
+
+所以整个项目的第一原则是：
+
+```text
+预测某个红窗时，只能用这个红窗之前已经可见的信息。
+```
+
+### 2. 查找和确认资料：只确认题面约束和数据格式
+
+本项目没有依赖外部排行榜经验来决定默认方案。实际用到的信息主要来自：
+
+- `problem.md`：确认红窗、绿窗、phase1/phase2 数据交换和 MAPE 指标。
+- `dataset/submission_sample_volume.csv`：确认提交文件结构和 420 行顺序。
+- volume CSV 表头：确认时间、收费站、方向、车辆属性字段。
+- 当前代码输出：确认每条路线的本地验证分数和融合权重。
+
+这一步的目的不是找复杂模型，而是先防止数据边界错。KDD Cup 2017 Task 2 的难点主要在数据使用规则：如果把 Oct.18-Oct.24 标签提前用于 phase1 调参，或者把 test2 红窗真实流量混进特征，模型分数会虚高但不合规。
+
+### 3. 数据处理：从车辆流水变成窗口级样本
+
+代码入口是 `run_task2.py`，它只负责把 `src/` 加入路径并调用 `kddcup2017_task2.pipeline.main()`。
+
+数据处理集中在 `data.py`：
+
+1. `read_volume_aggregate()` 读取 volume CSV。
+2. `floor_20min()` 把每辆车时间向下取整到 20 分钟窗口。
+3. 按 `(window_start, tollgate_id, direction)` 计数。
+4. `make_target_rows()` 生成训练或验证目标行。
+5. `make_target_rows_like_sample()` 按 sample 文件结构生成 phase2 提交行。
+
+原始数据是一车一行，模型需要的是窗口级标签：
+
+```text
+WindowKey = (window_start, tollgate_id, direction)
+value = 这个 20 分钟窗口内的车辆数
+```
+
+提交行数来自题目结构：
+
+```text
+5 combos * 12 target windows * 7 days = 420 rows
+```
+
+代码没有自己临时排序提交行，而是读取 `submission_sample_volume.csv` 的行结构并整体平移日期。这样做是为了避免提交文件和样例顺序不一致。
+
+### 4. 数据边界：区分 train_agg 和 known_agg
+
+代码里最重要的设计是把“训练标签”和“预测时可见世界”分开：
+
+```text
+train_agg = 有标签、可用于训练模型和拟合统计量的数据
+known_agg = 预测时允许看见的数据
+```
+
+在 phase1 无泄露验证中：
+
+```text
+train_agg = train1
+known_agg = train1 + test1 绿窗
+score labels = train2，只在最后算 MAPE
+```
+
+在 phase2 最终预测中：
+
+```text
+train_agg = train1 + train2
+known_agg = train1 + train2 + test2 绿窗
+score labels = 不存在，本地只能生成提交
+```
+
+这解释了为什么代码把 `validate-ensemble` 和 `predict-ensemble` 分成两个命令：
+
+| 命令 | 标签使用 | 是否可报告为 phase1 无泄露验证 |
+| --- | --- | --- |
+| `validate-ensemble` | train2 只在最后算分 | 是 |
+| `predict-ensemble` | train2 用来调 phase2 融合权重 | 否，但对 phase2 合法 |
+
+### 4.1 什么样的数据使用是合规的
+
+判断一份数据能不能用，不看它在文件夹里叫 train 还是 test，而看它在当前预测时刻是否已经公开、是否早于被预测窗口、是否只用于允许的环节。
+
+可以用的数据分为三类：
+
+| 数据类型 | 合规用法 | 例子 |
+| --- | --- | --- |
+| 已发布训练标签 | 可以训练模型、拟合历史统计、调合法阶段的权重 | train1 可用于 phase1；train1 + train2 可用于 phase2 |
+| 测试日绿窗 | 可以作为预测日的输入特征 | 预测 Oct.25 早高峰时使用 Oct.25 `06:00-08:00` |
+| 目标行自身信息 | 可以作为特征或分组键 | tollgate、direction、目标小时、weekday |
+
+不可以用的数据也可以直接列清：
+
+| 数据类型 | 不合规原因 | 例子 |
+| --- | --- | --- |
+| 待预测红窗真实流量 | 这是答案本身 | 预测 Oct.25 `08:40` 时使用 Oct.25 `08:40-09:00` volume |
+| 被预测窗口之后的数据 | 未来信息 | 预测 Oct.19 时使用 Oct.20 的流量 |
+| phase1 验证标签参与调参 | 会把验证集答案固化进方案 | 用 Oct.18-Oct.24 标签挑 `history_blend` 后报告 phase1 分数 |
+| 目标周整体统计 | 间接泄露红窗标签 | 先统计 Oct.25-Oct.31 全周均值再回填预测 |
+
+本项目里可以按场景判断：
+
+| 场景 | 合规训练标签 | 合规预测输入 | 标签能做什么 |
+| --- | --- | --- | --- |
+| train1 内部校准 | 校准日前的 train1 | 校准日绿窗 | 校准日红窗只用于学习融合权重 |
+| phase1 无泄露验证 | 完整 train1 | test1 绿窗 | train2 只允许最后算 MAPE |
+| phase2 权重校准 | 完整 train1 | test1 绿窗 | train2 已发布，可以调 phase2 权重 |
+| phase2 最终预测 | train1 + train2 | test2 绿窗 | test2 红窗没有本地标签，不能使用 |
+
+几个容易混淆但合规的点：
+
+- `test1` / `test2` 的绿窗可以用，因为题面明确提供它们作为预测红窗前的先导信息。
+- `lag_7` 可以用，但只能从 `known_agg` 查已经可见的 7 天前同窗口；如果 7 天前还没发布，就只能回退到历史统计。
+- 用目标小时学习融合权重是合规的，因为 `08`, `09`, `17`, `18` 来自目标行时间，不是目标红窗真实流量。
+- `predict-ensemble` 用 train2 调权是合规的 phase2 做法，因为预测 Oct.25-Oct.31 时，Oct.18-Oct.24 已经作为新增训练标签发布。
+
+当前代码用几个机制保证合规：
+
+| 机制 | 对应代码 | 作用 |
+| --- | --- | --- |
+| `known_agg` 和 `train_agg` 分离 | `pipeline.py`, `ensemble.py` | 防止训练统计和预测可见数据混在一起 |
+| `observation_windows_only()` | `ensemble.py` | 只把校准日绿窗加入已知世界 |
+| `fit_stats(train_rows)` | `features.py` | 历史均值只由训练行拟合 |
+| `transform(pred_rows, known_agg, known_attr_agg)` | `features.py` | 预测特征只从已知世界取数 |
+| `validate-ensemble` / `predict-ensemble` 分命令 | `pipeline.py` | 区分无泄露验证和 phase2 合法调权 |
+
+可以用一句检查规则总结：
+
+```text
+如果某个数据在真实比赛提交的那个时刻还不可见，它就不能进入训练、特征、调参或融合权重选择。
+```
+
+### 5. 特征工程：尽量只用稳定、可见的信息
+
+特征构造在 `features.py` 的 `FeatureBuilder`。它分两步：
+
+```text
+fit_stats(train_rows)
+transform(pred_rows, known_agg, known_attr_agg)
+```
+
+`fit_stats()` 只看训练目标行，用来拟合 combo 均值、combo-slot 均值、中位数等历史统计。`transform()` 给目标行生成特征，只能从 `known_agg` 和 `known_attr_agg` 取数。
+
+当前主要特征包括：
+
+| 特征组 | 例子 | 为什么需要 |
+| --- | --- | --- |
+| 身份特征 | tollgate、direction、combo | 不同收费站方向分布不同 |
+| 时间特征 | weekday、slot、hour、sin/cos | 高峰内部也有形状差异 |
+| 绿窗流量 | 6 个 obs 窗口、sum、mean、std、trend | 题目给出的当天先导信号 |
+| 历史滞后 | `lag_1`, `lag_7` | 日周期和周周期 |
+| 历史统计 | combo mean、combo-slot mean | 缺失滞后时的稳健回退 |
+| 车辆属性 | model / etc / veh_type 的绿窗计数和占比 | 绿窗结构可能预示红窗结构 |
+| 节假日标记 | 国庆、节后 | 处理 2016 年 10 月特殊分布 |
+
+天气文件有读取逻辑，但当前 SOTA 路线默认 `include_weather=False`。原因不是题面不能用天气，而是本地验证中天气没有稳定提升，反而增加噪声。
+
+### 6. 指标决定了模型不能只追求普通误差
+
+评估指标是 MAPE：
+
+```text
+mean(abs(actual - pred) / actual)
+```
+
+低流量窗口会被放大。例如实际为 10 时预测偏 5，误差贡献是 50%；实际为 100 时同样偏 5，只贡献 5%。因此代码做了三件事：
+
+- 训练目标默认用 `log1p(volume)`，降低大流量样本的尺度优势。
+- 使用 `mape_sample_weight`，对低流量样本加权。
+- 设计 `low_volume_block`，专门处理最近进入低流量 regime 的 combo。
+
+`mape_sample_weight` 的形式是：
+
+```text
+weight = (mean(max(y, 1)) / max(y, 1)) ** 0.3
+```
+
+这不是直接优化 MAPE，但会让模型训练阶段更重视低流量样本。
+
+### 7. 基座模型选择：为什么主模型是 ExtraTrees
+
+当前单模型主干是 `ExtraTreesRegressor`：
+
+```text
+n_estimators=600
+max_depth=14
+min_samples_leaf=10
+random_state=13
+```
+
+选择它不是因为它理论上一定最好，而是因为当前特征和数据规模下它最稳。实验输出显示：
+
+| 单模型路线 | phase1 MAPE | 结论 |
+| --- | ---: | --- |
+| Ridge | `0.196292` | 线性表达能力不足 |
+| XGBoost global | `0.163907` | 单独预测较弱 |
+| LightGBM global | `0.159851` | 单独预测较弱 |
+| HistGradientBoosting global | `0.161509` | 单独预测较弱 |
+| ExtraTrees low_volume_block | `0.120175` | 当前最佳单模型 |
+
+ExtraTrees 适合这里的原因是：样本量不大、特征里有大量离散 one-hot 和历史统计，树模型能自然处理非线性和局部组合；ExtraTrees 又比普通 boosting 更不容易在这个小数据上把局部噪声拟合过头。
+
+### 8. 单模型优化：从 global 到 low_volume_block
+
+基础 `train_and_predict()` 支持多种分组：
+
+```text
+global
+block
+combo
+combo_block
+combo_slot
+low_volume_block
+```
+
+正式单模型使用 `low_volume_block`。它的逻辑是：
+
+1. 先训练一个 global ExtraTrees。
+2. 再训练一个 morning/evening block ExtraTrees。
+3. 用 `select_low_volume_combos()` 找最近 7 天明显低位的 combo。
+4. 对这些 combo 使用 block 预测，其余 combo 使用 global 预测。
+
+低位 combo 的判断条件是最近均值同时低于：
+
+```text
+最近全局均值 * 0.6
+自身历史均值 * 0.6
+```
+
+这个方法解决的是局部分布漂移。普通 global 模型会把所有 combo 混在一起；当某个 combo 最近明显变低时，全局模型容易预测偏高。`low_volume_block` 用最近历史决定是否切换，而不是用 phase1 标签选择 combo，所以没有验证集泄露。
+
+单模型调参结果显示，当前参数仍是最稳的：
+
+| 路线 | phase1 MAPE |
+| --- | ---: |
+| `sota_single_extra` | `0.120175` |
+| `extra_lv_ratio07` | `0.120489` |
+| `extra_lv_ratio05` | `0.121067` |
+| `extra_weight02` | `0.121346` |
+| `extra_weight04` | `0.123107` |
+| `extra_weather` | `0.123011` |
+
+因此没有继续把天气、极端样本权重或更深树写入默认配置。
+
+### 9. 从单模型到四模型融合
+
+单模型到 `0.120175` 后，再提升主要靠降低残差相关性。当前四模型融合候选是：
+
+| 候选 | 训练目标 | 作用 |
+| --- | --- | --- |
+| `low_volume_block` | `log1p(volume)` | 主力预测 |
+| `xgb` | `log1p(volume)` | 另一类树模型偏差 |
+| `mlp` | `log1p(volume)` | 非树模型误差形态 |
+| `ratio_lag_7` | 相对 `lag_7` 的比例 | 显式建模周周期 |
+
+融合方式是非负凸组合：
+
+```text
+pred = prediction_matrix @ weights
+weights >= 0
+sum(weights) = 1
+objective = calibration MAPE
+```
+
+优化器使用 `scipy.optimize.minimize(method="SLSQP")`，从均匀权重和每个单模型独占权重多个起点开始，降低局部解风险。
+
+注意：XGBoost、MLP、ratio_lag_7 单独分数都不强，但它们仍然可能有价值。融合看的是残差互补，不是单模型排行榜。比如晚高峰中，`xgb` 和 `mlp` 会获得明显权重，说明它们在某些窗口能补主模型偏差。
+
+### 10. 从上一版 SOTA 到当前 SOTA
+
+上一版 SOTA 是四模型加一组全局权重：
+
+```sh
+python run_task2.py validate-ensemble --weight-scope global
+```
+
+结果：
+
+```text
+validation_mape=0.118018
+```
+
+它的问题是所有目标窗口共用同一组权重，相当于假设早高峰和晚高峰的模型误差结构一样。但实验显示并不是这样：
+
+- 早高峰更依赖 `low_volume_block`。
+- 晚高峰中 `xgb`, `mlp`, `ratio_lag_7` 的补充价值更明显。
+
+因此在 `src1/` 中探索了不同融合粒度：
+
+| 路线 | phase1 MAPE | 含义 |
+| --- | ---: | --- |
+| global weights | `0.118018` | 上一版 SOTA |
+| combo weights | `0.117580` | 每个 combo 一组权重，提升有限 |
+| block weights | `0.116097` | 早晚高峰分开，phase1 很强 |
+| hour weights | `0.116166` | 每个目标小时一组权重 |
+| slot weights | `0.116959` | 每个 20 分钟 slot 一组，方差更高 |
+| combo_block weights | `0.119297` | 校准好但验证差，过拟合 |
+
+直接看 phase1，`block_shrink14/15` 能到约 `0.116001`。但 shrink 比例来自 phase1 sweep，作为正式方案不够干净。为了避免“看了验证集再挑方案”，又做了 train1 内部 rolling fold 选择：
+
+| 路线 | rolling mean MAPE | phase1 MAPE |
+| --- | ---: | ---: |
+| hour weights | `0.222422` | `0.116166` |
+| global weights | `0.223033` | `0.118018` |
+| block weights | `0.223099` | `0.116097` |
+| slot weights | `0.223868` | `0.116959` |
+| combo weights | `0.290771` | `0.117580` |
+
+最终正式选 `hour weights`，理由是：
+
+- 比上一版 global 更强。
+- 由 train1 rolling fold 支持，不是直接按 phase1 后验挑最低分。
+- 粒度比 block 更细，能区分 `08/09/17/18`。
+- 粒度又比 slot、combo、combo_block 更稳。
+- 讲解上也清楚：不同目标小时使用不同融合比例。
+
+当前正式命令：
+
+```sh
+python run_task2.py validate-ensemble
+```
+
+当前正式结果：
+
+```text
+weight_scope=hour
+validation_mape=0.116167
+```
+
+### 11. 当前结果数据和每条路线的含义
+
+当前主线结果如下：
+
+| 路线 | 命令或来源 | MAPE | 含义 |
+| --- | --- | ---: | --- |
+| 单模型默认 | `validate` | `0.120175` | 最强单模型，ExtraTrees + low_volume_block |
+| 四模型全局权重 | `validate-ensemble --weight-scope global` | `0.118018` | 上一版 SOTA |
+| 四模型小时权重 | `validate-ensemble` | `0.116167` | 当前正式可报告 phase1 无泄露结果 |
+| phase2 合法校准 | `predict-ensemble` | `0.111638` | 用 train2 调权后预测 Oct.25-Oct.31，只是校准误差 |
+
+`validate-ensemble` 当前小时权重如下：
+
+| 目标小时 | `low_volume_block` | `xgb` | `mlp` | `ratio_lag_7` |
+| --- | ---: | ---: | ---: | ---: |
+| `08` | `0.857320` | `0.000000` | `0.064316` | `0.078364` |
+| `09` | `0.933716` | `0.000000` | `0.000000` | `0.066284` |
+| `17` | `0.330386` | `0.301570` | `0.285249` | `0.082795` |
+| `18` | `0.309732` | `0.213464` | `0.277083` | `0.199722` |
+
+这组权重的直观解释是：
+
+- `08/09` 更相信 ExtraTrees 主模型。
+- `17/18` 明显更分散，说明晚高峰中不同模型的误差互补更强。
+- `ratio_lag_7` 在所有小时都有一定价值，尤其在 `18` 点更明显。
+
+`predict-ensemble` 的 phase2 校准权重如下：
+
+| 目标小时 | `low_volume_block` | `xgb` | `mlp` | `ratio_lag_7` |
+| --- | ---: | ---: | ---: | ---: |
+| `08` | `0.622410` | `0.174285` | `0.039189` | `0.164117` |
+| `09` | `0.743852` | `0.009330` | `0.094074` | `0.152744` |
+| `17` | `0.625160` | `0.019524` | `0.355316` | `0.000000` |
+| `18` | `0.160764` | `0.247434` | `0.116063` | `0.475738` |
+
+这组权重只能用于 phase2，因为它用 Oct.18-Oct.24 已发布标签调权。不能把 `0.111638` 当成 phase1 无泄露验证成绩。
+
+### 12. 为什么不采用其他方向
+
+当前没有采用其他路线，不是因为它们不能跑，而是因为代码和实验结果不支持它们作为默认。
+
+| 方向 | 没采用的原因 |
+| --- | --- |
+| 直接换成 XGBoost / LightGBM / HGB | 单模型 MAPE 约 `0.160`，明显弱于 ExtraTrees |
+| 加天气特征 | 当前验证下从 `0.120175` 变差到约 `0.123011` |
+| 加更多 ExtraTrees 变体进融合 | 校准更好但验证变差，说明相关性高、容易过拟合 |
+| combo_block 权重 | 校准 MAPE 很低，但 phase1 MAPE `0.119297`，过细分组导致方差高 |
+| slot 权重 | phase1 有提升，但 rolling fold 不如 hour，且每组样本更少 |
+| block shrink14/15 | phase1 最低约 `0.116001`，但 shrink 比例来自 phase1 sweep，不够合规稳健 |
+| history_blend / prediction_scale | 曾在验证集上有效，但属于后验调参风险，不能作为默认 |
+| trajectory 特征 | 当前没有进入 SOTA；如果使用，必须严格限定每个预测时刻前可见的轨迹 |
+
+### 13. 过程中遇到的问题和解决方式
+
+不包括运行环境问题，主要技术问题有这些：
+
+| 问题 | 解决方式 |
+| --- | --- |
+| 测试 volume 文件容易被误解为标签 | 明确只使用 test1/test2 绿窗，红窗标签只在训练发布后可用 |
+| phase1 验证容易泄露 train2 | `validate-ensemble` 中 train2 只用于最后算分，不参与训练和调权 |
+| phase2 又必须利用 train2 | 单独写 `predict-ensemble`，把 train2 作为 phase2 已发布训练标签 |
+| MAPE 对低流量敏感 | log 目标、低流量样本权重、low_volume_block |
+| 某些 combo 出现近期低位 regime | 用训练历史最近 7 天触发 block 模型切换 |
+| 弱模型单独分数差 | 只在融合中使用，看残差互补而不是单模型排名 |
+| phase1 sweep 容易过拟合 | 用 train1 rolling fold 选择正式路线 |
+| 提交行顺序可能错 | 按 sample 文件生成提交行，而不是手写排序 |
+
+### 14. 最终选择和后续改进方向
+
+最终选择是：
+
+```text
+ExtraTrees low_volume_block 主模型
++ XGBoost / MLP / ratio_lag_7 补充模型
++ 按目标小时学习非负 MAPE 融合权重
+```
+
+这个方法是从上一版全局融合权重的问题自然发展来的：全局权重太粗，不能表达 `08`, `09`, `17`, `18` 的误差差异；而过细的 combo 或 slot 权重又容易方差过高。hour 权重在分辨率、稳健性和可解释性之间比较均衡。
+
+后续最值得继续做的是：
+
+1. 做更严格的 rolling / nested CV，让权重粒度、shrink、成员选择都只由 train1 内部决定。
+2. 尝试层级融合，例如 hour 权重向 global 权重自动 shrink，而不是人工 sweep shrink 比例。
+3. 引入合法 trajectory 绿窗特征，但必须为每个预测窗口定义可见截止时间。
+4. 做 combo-hour 残差分析，找系统性偏高或偏低的局部窗口。
+5. 重新设计节假日和节后恢复特征，而不是只用简单标记。
+6. 尝试更贴近 MAPE 的训练目标或计数模型，但必须沿用同一套无泄露验证协议。
+
 ## 任务是什么
 
 KDD Cup 2017 Task 2 的目标是预测收费站在未来高峰期的 20 分钟平均车流量。
