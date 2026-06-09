@@ -363,6 +363,12 @@ def main(argv: Sequence[str] | None = None) -> None:
         type=Path,
         default=Path("outputs/validation_phase1_ensemble_pred.csv"),
     )
+    valid_ensemble.add_argument(
+        "--weight-scope",
+        choices=["global", "hour", "block"],
+        default="hour",
+        help="blend weights globally, by target hour, or by morning/evening block",
+    )
     valid_ensemble.set_defaults(func=validate_ensemble)
 
     pred_ensemble = sub.add_parser(
@@ -370,6 +376,12 @@ def main(argv: Sequence[str] | None = None) -> None:
         help="legally calibrate four-model ensemble on released phase2 training labels and predict phase2",
     )
     pred_ensemble.add_argument("--output", type=Path, default=Path("outputs/submission_task2_volume_ensemble.csv"))
+    pred_ensemble.add_argument(
+        "--weight-scope",
+        choices=["global", "hour", "block"],
+        default="hour",
+        help="blend weights globally, by target hour, or by morning/evening block",
+    )
     pred_ensemble.set_defaults(func=predict_ensemble)
 
     args = parser.parse_args(argv)

@@ -18,6 +18,8 @@ python run_task2.py predict-ensemble
 
 该路线的核心是：先生成 4 个误差形态不同的预测器输出，再用非负权重做加权平均。权重通过历史校准集拟合，不在待评估目标周上调权。
 
+当前正式选入 `src/` 的版本使用按目标小时分组的融合权重。四个候选模型没有变化，变化只在融合层：上一版 SOTA 对所有目标窗口共用一组权重；当前版本分别为 `08`, `09`, `17`, `18` 四个目标小时学习权重。
+
 ## 指标
 
 无泄露 phase1 验证：
@@ -25,17 +27,46 @@ python run_task2.py predict-ensemble
 - 命令：`python run_task2.py validate-ensemble`
 - 校准集：train1 最后一周
 - phase1 目标周：Oct.18-Oct.24
-- phase1 MAPE：`0.118018`
+- 权重粒度：按目标小时
+- phase1 MAPE：`0.116167`
+- 上一版全局权重 MAPE：`0.118018`
 
 phase2 合法预测校准：
 
 - 命令：`python run_task2.py predict-ensemble`
 - 校准集：Oct.18-Oct.24 已发布训练标签
 - phase2 目标周：Oct.25-Oct.31
-- 校准 MAPE：`0.116116`
+- 权重粒度：按目标小时
+- 校准 MAPE：`0.111638`
 - 输出：`outputs/submission_task2_volume_ensemble.csv`
 
-注意：`0.116116` 不能作为无泄露 phase1 验证分数。它只表示在 phase2 场景下，使用已经发布的 Oct.18-Oct.24 标签校准融合权重时，历史校准误差达到该水平。
+注意：`0.111638` 不能作为无泄露 phase1 验证分数。它只表示在 phase2 场景下，使用已经发布的 Oct.18-Oct.24 标签校准融合权重时，历史校准误差达到该水平。
+
+## 从上一版 SOTA 到当前版本
+
+上一版 SOTA 是同一个四模型候选集合加一组全局非负融合权重：
+
+```sh
+python run_task2.py validate-ensemble --weight-scope global
+```
+
+该路线的无泄露 phase1 MAPE 为 `0.118018`。它的优点是简单稳健，但一个问题也很明显：所有目标窗口共用同一组权重，等于假设早上 `08:00-10:00` 和晚上 `17:00-19:00` 的模型误差结构一致。
+
+后续在 `src1/` 中探索了几类不改变数据边界的改进：
+
+- 更换或增加融合成员，例如 LightGBM、ridge、ExtraTrees variants。
+- 更改融合权重粒度，例如 global、morning/evening block、target hour、20-minute slot、combo。
+- 对 block 权重做 global shrinkage，降低过细分组的方差。
+
+直接看 phase1，block shrinkage 可以到约 `0.11600`，但 shrinkage 比例来自 phase1 sweep，作为正式方案说服力不足。随后用 train1 内部滚动折做选择，`sota4_hour_weights` 在两个 train1 rolling folds 的均值上优于 global 和 block。它不是 phase1 后验挑出来的最激进结果，但能在不使用 phase1 标签选型的前提下，把可报告 phase1 MAPE 从 `0.118018` 降到 `0.116167`。
+
+因此当前正式方案采用：
+
+- 保留上一版四个候选模型。
+- 不增加新的数据源。
+- 不使用 train2 标签调 `validate-ensemble` 权重。
+- 仅把融合权重从 global 改为 target hour。
+- 保留 `--weight-scope global` 作为上一版 SOTA 的复现入口。
 
 ## 代码入口与函数链路
 
@@ -245,6 +276,15 @@ pred = P @ weights
 
 多初始点的作用是降低 SLSQP 从单个初始点陷入较差局部解的概率。最终选择校准 MAPE 最低的结果。
 
+当前默认不是只学习一组 `weights`，而是先按目标小时分组：
+
+```text
+scope = hour(target_start) in {08, 09, 17, 18}
+pred[row] = P[row] @ weights_by_scope[scope]
+```
+
+分组键来自待预测行的 `start.hour`，这是题面要求预测的目标时间，本身不是标签，也不包含未来真实流量。因此按小时分组不会造成数据泄露；每个小时内的权重仍只由历史校准集真实标签拟合。
+
 ## `validate-ensemble`
 
 目标：给出无泄露 phase1 验证结果。
@@ -264,7 +304,7 @@ train2: Oct.18-Oct.24 标签，只用于最后算分
 3. `observation_windows_only(train1, calibration_days)` 只取校准日绿窗。
 4. `merge_aggregates` 把校准训练历史和校准日绿窗合成 `calibration_known`。
 5. 用校准训练部分训练四个模型，预测校准集红窗。
-6. 用校准集真实红窗拟合融合权重。
+6. 用校准集真实红窗按目标小时拟合融合权重。
 7. 用完整 train1 训练四个模型。
 8. 用 train1 + test1 绿窗预测 Oct.18-Oct.24。
 9. 用第 6 步权重融合。
@@ -272,14 +312,22 @@ train2: Oct.18-Oct.24 标签，只用于最后算分
 
 权重：
 
-| 模型 | 权重 |
-| --- | ---: |
-| `low_volume_block` | `0.776957` |
-| `xgb` | `0.000000` |
-| `mlp` | `0.153564` |
-| `ratio_lag_7` | `0.069479` |
+| 目标小时 | 校准 MAPE | `low_volume_block` | `xgb` | `mlp` | `ratio_lag_7` |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `08` | `0.122942` | `0.857320` | `0.000000` | `0.064316` | `0.078364` |
+| `09` | `0.128705` | `0.933716` | `0.000000` | `0.000000` | `0.066284` |
+| `17` | `0.138973` | `0.330386` | `0.301570` | `0.285249` | `0.082795` |
+| `18` | `0.156704` | `0.309732` | `0.213464` | `0.277083` | `0.199722` |
 
-该流程不使用 Oct.18-Oct.24 标签拟合权重，因此可以作为无泄露验证结果。
+总体校准 MAPE 为 `0.136831`，phase1 验证 MAPE 为 `0.116167`。该流程不使用 Oct.18-Oct.24 标签拟合权重，因此可以作为无泄露验证结果。
+
+上一版全局权重可用以下命令复现：
+
+```sh
+python run_task2.py validate-ensemble --weight-scope global
+```
+
+其权重为 `low_volume_block=0.776957`, `xgb=0.000000`, `mlp=0.153564`, `ratio_lag_7=0.069479`，phase1 MAPE 为 `0.118018`。
 
 ## `predict-ensemble`
 
@@ -298,7 +346,7 @@ test2: Oct.25-Oct.31 绿窗
 
 1. 用 train1 训练四个模型。
 2. 用 train1 + test1 绿窗预测 Oct.18-Oct.24。
-3. 使用已发布的 train2 标签拟合融合权重。
+3. 使用已发布的 train2 标签按目标小时拟合融合权重。
 4. 合并 train1 + train2，得到最终训练标签。
 5. 合并最终训练标签和 test2 绿窗，得到 phase2 可见输入。
 6. 读取 `submission_sample_volume.csv` 的样例结构。
@@ -308,14 +356,14 @@ test2: Oct.25-Oct.31 绿窗
 
 权重：
 
-| 模型 | 权重 |
-| --- | ---: |
-| `low_volume_block` | `0.512492` |
-| `xgb` | `0.115189` |
-| `mlp` | `0.153896` |
-| `ratio_lag_7` | `0.218422` |
+| 目标小时 | 校准 MAPE | `low_volume_block` | `xgb` | `mlp` | `ratio_lag_7` |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `08` | `0.090588` | `0.622410` | `0.174285` | `0.039189` | `0.164117` |
+| `09` | `0.094995` | `0.743852` | `0.009330` | `0.094074` | `0.152744` |
+| `17` | `0.111332` | `0.625160` | `0.019524` | `0.355316` | `0.000000` |
+| `18` | `0.149636` | `0.160764` | `0.247434` | `0.116063` | `0.475738` |
 
-该流程对 phase2 是合法的，因为 Oct.18-Oct.24 在 phase2 中已经是历史训练标签。
+总体校准 MAPE 为 `0.111638`。该流程对 phase2 是合法的，因为 Oct.18-Oct.24 在 phase2 中已经是历史训练标签。
 
 ## 为什么两个模式权重不同
 
@@ -325,8 +373,8 @@ test2: Oct.25-Oct.31 绿窗
 
 这解释了两个现象：
 
-- `xgb` 在无泄露 phase1 权重中为 0，但在 phase2 合法校准中为非零。
-- `ratio_lag_7` 在 phase2 权重中更高，说明 Oct.18-Oct.24 到 Oct.25-Oct.31 的周周期校准信号更强。
+- 同一个模型在不同小时的权重差异很大，例如 `xgb` 在早高峰 phase1 校准中为 0，但在 `17` 和 `18` 点获得明显权重。
+- `ratio_lag_7` 在 phase2 的 `18` 点权重更高，说明 Oct.18-Oct.24 到 Oct.25-Oct.31 的周周期校准信号对该时段更强。
 
 ## 为什么弱单模型仍能进入融合
 
@@ -346,13 +394,15 @@ test2: Oct.25-Oct.31 绿窗
 
 - `calibration=latest_training_fold`
 - `leakage_check=uses only labels before validation period`
+- `weight_scope=hour`
 - `validation_rows=420`
-- `validation_mape=0.118018`
+- `validation_mape=0.116167`
 
 运行 `predict-ensemble` 后，应关注：
 
 - `calibration=train1_to_train2`
 - `leakage_check=legal_for_phase2_only; do not report this as a no-leak phase1 validation score`
+- `weight_scope=hour`
 - `prediction_rows=420`
 - `submission=outputs/submission_task2_volume_ensemble.csv`
 
@@ -376,7 +426,7 @@ test2: Oct.25-Oct.31 绿窗
 
 ## 风险与解释
 
-1. 融合权重对校准集分布敏感。国庆异常周会使权重明显偏移，因此 `validate-ensemble` 只采用最近训练周校准，而不是混合所有旧滚动折。
+1. 融合权重对校准集分布敏感。国庆异常周会使权重明显偏移，因此当前只把权重细分到目标小时，没有采用更细的 combo 或 slot 权重作为正式默认。
 2. `xgb` 和 `mlp` 单模型分数较弱，但与主模型误差相关性不完全相同，因此在特定校准下仍能贡献权重。
 3. `predict-ensemble` 的校准分数更低，但它使用了 train2 标签；这个数只说明 phase2 合法校准效果，不能用于宣传 phase1 无泄露验证成绩。
 4. 当前天气表读取但不启用天气特征。之前的局部验证没有证明天气特征能稳定提升，因此 SOTA 路线保留了更保守的特征集。

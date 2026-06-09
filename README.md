@@ -63,8 +63,8 @@ python run_task2.py --no-prune-features validate
   - 单纯 `--group global` 为约 `0.120773`；旧默认约 `0.122050`。
 - `--history-blend 0.09` 可在 phase1 验证上得到约 `0.119564`，但该权重来自 phase1 验证周调参；训练期滚动周没有支持把它作为默认配置。
 - 四模型融合命令：
-  - `validate-ensemble`：只用训练期最后一周校准融合权重，再评估 phase1，MAPE 约 `0.118018`，不使用 phase1 验证标签调权。
-  - `predict-ensemble`：用已发布的 Oct.18-24 标签校准权重，再预测 Oct.25-31；校准 MAPE 约 `0.116116`，该数合法用于 phase2 权重估计，但不能当作无泄露 phase1 验证分数。
+  - `validate-ensemble`：只用训练期最后一周校准融合权重，再评估 phase1，默认按目标小时分别学习权重，MAPE 约 `0.116167`，不使用 phase1 验证标签调权。上一版全局权重路线可用 `--weight-scope global` 复现，MAPE 约 `0.118018`。
+  - `predict-ensemble`：用已发布的 Oct.18-24 标签校准权重，再预测 Oct.25-31；默认按目标小时调权，校准 MAPE 约 `0.111638`，该数合法用于 phase2 权重估计，但不能当作无泄露 phase1 验证分数。
 - 递推使用前序目标窗预测、trajectory 绿窗统计、天气特征、分组建模和恢复已剪枝特征均已复测，当前默认下没有带来叠加收益。
 - 旧实验 `--history-blend 0.195 --prediction-scale 0.962 --sample-weight-power 0.22` 在旧模型上可得到约 `0.117796`，但这组参数来自该验证集调参，不能作为无泄露默认配置。
 - `extra + global + log + 观测结构特征 + 无天气 + 轻量 MAPE 权重 + 不剪枝` 验证 MAPE：约 `0.124342`

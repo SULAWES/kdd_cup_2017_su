@@ -179,6 +179,44 @@ def optimize_blend_weights(actual, prediction_matrix):
     return np.asarray(best.x, dtype=float), float(best.fun)
 
 
+def blend_scope_key(row: TargetRow, scope: str):
+    if scope == "global":
+        return ("global",)
+    if scope == "hour":
+        return (f"{row.start.hour:02d}",)
+    if scope == "block":
+        return ("morning" if row.start.hour < 12 else "evening",)
+    raise ValueError(f"unknown blend weight scope: {scope}")
+
+
+def optimize_scoped_blend_weights(actual, prediction_matrix, rows: Sequence[TargetRow], scope: str):
+    keys = [blend_scope_key(row, scope) for row in rows]
+    predictions = np.zeros(len(rows), dtype=float)
+    weights_by_scope = {}
+    scores_by_scope = {}
+    for key in sorted(set(keys)):
+        idx = [row_idx for row_idx, row_key in enumerate(keys) if row_key == key]
+        weights, score = optimize_blend_weights(actual[idx], prediction_matrix[idx])
+        weights_by_scope[key] = weights
+        scores_by_scope[key] = score
+        predictions[idx] = prediction_matrix[idx] @ weights
+    return weights_by_scope, float(mape(actual, predictions)), scores_by_scope
+
+
+def apply_scoped_blend(prediction_matrix, rows: Sequence[TargetRow], weights_by_scope, scope: str):
+    predictions = np.zeros(len(rows), dtype=float)
+    for idx, row in enumerate(rows):
+        key = blend_scope_key(row, scope)
+        if key not in weights_by_scope:
+            raise KeyError(f"missing blend weights for scope {key}")
+        predictions[idx] = prediction_matrix[idx] @ weights_by_scope[key]
+    return predictions
+
+
+def format_scope_key(key) -> str:
+    return "_".join(str(item) for item in key)
+
+
 def latest_training_fold_split(days):
     latest_day = max(days)
     valid_start = latest_day - timedelta(days=6)
@@ -248,7 +286,13 @@ def validate_latest_fold_ensemble(args) -> None:
         combos,
     )
     calibration_actual = np.array([target_volume(train1, row) for row in calibration_rows], dtype=float)
-    weights, calibration_score = optimize_blend_weights(calibration_actual, calibration_matrix)
+    weight_scope = getattr(args, "weight_scope", "hour")
+    weights_by_scope, calibration_score, scope_scores = optimize_scoped_blend_weights(
+        calibration_actual,
+        calibration_matrix,
+        calibration_rows,
+        weight_scope,
+    )
 
     valid_days = infer_dates(train2)
     valid_rows = make_target_rows(valid_days, combos)
@@ -263,15 +307,19 @@ def validate_latest_fold_ensemble(args) -> None:
         combos,
     )
     validation_actual = np.array([target_volume(train2, row) for row in valid_rows], dtype=float)
-    predictions = validation_matrix @ weights
+    predictions = apply_scoped_blend(validation_matrix, valid_rows, weights_by_scope, weight_scope)
     score = mape(validation_actual, predictions)
 
     print("calibration=latest_training_fold")
     print("leakage_check=uses only labels before validation period")
+    print(f"weight_scope={weight_scope}")
     print(f"calibration_rows={len(calibration_rows)}")
     print(f"calibration_mape={calibration_score:.6f}")
-    for name, weight in zip(ENSEMBLE_MODEL_NAMES, weights):
-        print(f"weight_{name}={weight:.6f}")
+    for key, weights in weights_by_scope.items():
+        scope_name = format_scope_key(key)
+        print(f"scope_{scope_name}_calibration_mape={scope_scores[key]:.6f}")
+        for name, weight in zip(ENSEMBLE_MODEL_NAMES, weights):
+            print(f"weight_{scope_name}_{name}={weight:.6f}")
     for name, candidate in candidate_predictions.items():
         print(f"single_{name}_mape={mape(validation_actual, candidate):.6f}")
     print(f"validation_rows={len(valid_rows)}")
@@ -310,7 +358,13 @@ def predict_phase2_ensemble(args) -> None:
         combos,
     )
     calibration_actual = np.array([target_volume(train2, row) for row in calibration_rows], dtype=float)
-    weights, calibration_score = optimize_blend_weights(calibration_actual, calibration_matrix)
+    weight_scope = getattr(args, "weight_scope", "hour")
+    weights_by_scope, calibration_score, scope_scores = optimize_scoped_blend_weights(
+        calibration_actual,
+        calibration_matrix,
+        calibration_rows,
+        weight_scope,
+    )
 
     train_all = merge_aggregates(train1, train2)
     known = merge_aggregates(train_all, test2_obs)
@@ -330,15 +384,19 @@ def predict_phase2_ensemble(args) -> None:
         pred_rows,
         pred_combos,
     )
-    predictions = prediction_matrix @ weights
+    predictions = apply_scoped_blend(prediction_matrix, pred_rows, weights_by_scope, weight_scope)
     write_submission(args.output, pred_rows, predictions)
 
     print("calibration=train1_to_train2")
     print("leakage_check=legal_for_phase2_only; do not report this as a no-leak phase1 validation score")
+    print(f"weight_scope={weight_scope}")
     print(f"calibration_rows={len(calibration_rows)}")
     print(f"calibration_mape={calibration_score:.6f}")
-    for name, weight in zip(ENSEMBLE_MODEL_NAMES, weights):
-        print(f"weight_{name}={weight:.6f}")
+    for key, weights in weights_by_scope.items():
+        scope_name = format_scope_key(key)
+        print(f"scope_{scope_name}_calibration_mape={scope_scores[key]:.6f}")
+        for name, weight in zip(ENSEMBLE_MODEL_NAMES, weights):
+            print(f"weight_{scope_name}_{name}={weight:.6f}")
     print(f"prediction_rows={len(pred_rows)}")
     print(f"pred_mean={predictions.mean():.3f}")
     print(f"submission={args.output}")

@@ -19,8 +19,9 @@
 | --- | ---: | --- | --- |
 | ExtraTrees global | `0.120773` | 无泄露 | 稳定基线 |
 | low_volume_block | `0.120175` | 无泄露 | 默认单模型路线 |
-| 四模型融合 `validate-ensemble` | `0.118018` | 无泄露 | 当前最佳可报告验证路线 |
-| 四模型融合 `predict-ensemble` 校准 | `0.116116` | 对 phase2 合法；不可当 phase1 无泄露验证分数 | 用于生成 phase2 融合提交 |
+| 四模型融合 `validate-ensemble` 默认小时权重 | `0.116167` | 无泄露 | 当前最佳可报告验证路线 |
+| 四模型融合 `validate-ensemble --weight-scope global` | `0.118018` | 无泄露 | 上一版 SOTA，可复现对照 |
+| 四模型融合 `predict-ensemble` 默认小时权重校准 | `0.111638` | 对 phase2 合法；不可当 phase1 无泄露验证分数 | 用于生成 phase2 融合提交 |
 | `--history-blend 0.09` | `0.119564` | 使用 phase1 验证标签调权 | 只作上界参考 |
 
 ## 泄露边界

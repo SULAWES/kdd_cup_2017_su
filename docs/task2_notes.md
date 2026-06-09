@@ -86,12 +86,12 @@ phase1 离线验证方式：
 - 当前默认 ExtraTrees + low_volume_block + log + 观测结构特征 + 无天气 + 轻量 MAPE 权重 + 剪枝噪声特征：MAPE 约 `0.120175`
   - 该方法不使用 phase1 验证标签选择 combo；只由训练数据最近 7 天均值触发。phase1 训练数据和 phase2 全训练数据下均只选择 `1_0`。
   - 训练期滚动折中，低位 regime 出现前该规则不触发，因此与 global 分数一致；在 Oct.11-17 已知低位后预测 Oct.18-24 时触发。
-- 四模型融合 `validate-ensemble`：MAPE 约 `0.118018`
+- 四模型融合 `validate-ensemble` 默认按目标小时学习权重：MAPE 约 `0.116167`
   - 模型为 `low_volume_block`, `xgb`, `mlp`, `ratio_lag_7`。
-  - 权重只用训练期最后一周回测拟合：`low_volume_block=0.776957`, `xgb=0`, `mlp=0.153564`, `ratio_lag_7=0.069479`。
-- 四模型融合 `predict-ensemble` 的 phase2 校准 MAPE 约 `0.116116`
+  - 权重只用训练期最后一周回测拟合，并按 `08`, `09`, `17`, `18` 四个目标小时分别学习。上一版全局权重路线可用 `--weight-scope global` 复现，MAPE 约 `0.118018`。
+- 四模型融合 `predict-ensemble` 默认小时权重的 phase2 校准 MAPE 约 `0.111638`
   - 该校准用 Oct.18-24 已发布标签，是预测 Oct.25-31 时的合法历史数据；不能把这个数当作无泄露 phase1 验证分数。
-  - 对应权重：`low_volume_block=0.512492`, `xgb=0.115189`, `mlp=0.153896`, `ratio_lag_7=0.218422`。
+  - 对应权重同样按目标小时分别学习，避免早高峰和晚高峰共用同一组融合比例。
 - 显式实验 `--history-blend 0.09`：MAPE 约 `0.119564`，但训练期滚动周没有支持把该 blend 写入默认值。
 - 已复测但未采纳：递推使用前序目标窗预测、trajectory 绿窗统计、天气特征、分组建模、恢复剪枝特征，均未优于当前默认。
 - 旧显式实验 `--sample-weight-power 0.22 --history-blend 0.195 --prediction-scale 0.962`：MAPE 约 `0.117796`，但该结果使用 phase1 验证标签选择后处理权重和全局缩放，不能视作无泄露提升。

@@ -8,6 +8,7 @@
 - 预测目标红窗时，只能使用题目允许的同日绿窗和更早历史。
 - `validate-ensemble` 要模拟 phase1 无泄露验证，不能用 train2 标签调权。
 - `predict-ensemble` 面向 phase2，允许使用已经发布的 train2 标签调权。
+- 当前默认按目标小时学习融合权重；目标小时来自提交行本身，不是标签，也不包含未来真实流量。
 
 ## 数据文件
 
@@ -28,10 +29,10 @@
 
 ## 数据血缘总览
 
-| 运行模式 | 权重校准标签 | 基础模型最终训练标签 | 目标预测输入 | 最终本地评分标签 |
-| --- | --- | --- | --- | --- |
-| `validate-ensemble` | train1 内部最后一周 | 完整 train1 | test1 绿窗 | train2，仅最后算分 |
-| `predict-ensemble` | train2 | train1 + train2 | test2 绿窗 | 无本地标签 |
+| 运行模式 | 权重校准标签 | 权重粒度 | 基础模型最终训练标签 | 目标预测输入 | 最终本地评分标签 |
+| --- | --- | --- | --- | --- | --- |
+| `validate-ensemble` | train1 内部最后一周 | 目标小时 | 完整 train1 | test1 绿窗 | train2，仅最后算分 |
+| `predict-ensemble` | train2 | 目标小时 | train1 + train2 | test2 绿窗 | 无本地标签 |
 
 这张表是判断是否泄露的最短路径：
 
@@ -216,7 +217,7 @@ phase2 提交行由 `make_target_rows_like_sample(sample_path, first_pred_day)` 
 2. 从 train1 中拆出最后 7 天作为校准集。
 3. 校准集训练部分只使用最后 7 天之前的数据。
 4. 校准集预测输入只加入校准日同日绿窗。
-5. 校准权重只由 train1 内部得到。
+5. 校准权重只由 train1 内部得到，并按目标小时分别学习。
 6. phase1 验证时，使用完整 train1 训练基础模型。
 7. phase1 输入只合并 test1 的绿窗数据。
 8. 最后用 train2 标签计算验证 MAPE。
@@ -227,7 +228,7 @@ phase2 提交行由 `make_target_rows_like_sample(sample_path, first_pred_day)` 
 校准权重:
 train1 earlier days -> train model
 train1 latest 7 days green windows -> prediction features
-train1 latest 7 days red windows -> optimize weights
+train1 latest 7 days red windows -> optimize hourly weights
 
 phase1 验证:
 train1 all days -> train model
@@ -250,7 +251,7 @@ train2 red windows -> score only
 
 1. 用 train1 训练模型。
 2. 用 test1 绿窗预测 Oct.18-Oct.24。
-3. 用 train2 标签校准融合权重。
+3. 用 train2 标签按目标小时校准融合权重。
 4. 用 train1 + train2 训练最终模型。
 5. 用 test2 绿窗预测 Oct.25-Oct.31。
 6. 按 `submission_sample_volume.csv` 的行顺序写出提交。
@@ -261,7 +262,7 @@ train2 red windows -> score only
 phase2 权重校准:
 train1 labels -> train candidate models
 test1 green windows -> prediction features
-train2 labels -> optimize weights
+train2 labels -> optimize hourly weights
 
 phase2 最终预测:
 train1 + train2 labels -> train candidate models
@@ -274,7 +275,7 @@ no test2 red labels -> only output submission
 - train2 标签在 phase2 场景中是已发布训练数据。
 - test2 只提供 Oct.25-Oct.31 的绿窗，不提供红窗标签。
 - 输出目标红窗没有被读取或反推。
-- `calibration_mape=0.116116` 是历史校准误差，不是目标周真实误差。
+- `calibration_mape=0.111638` 是历史校准误差，不是目标周真实误差。
 
 ## 天气和 trajectory 的使用状态
 
@@ -321,10 +322,11 @@ outputs/submission_task2_volume_ensemble.csv
 每行预测都来自：
 
 ```text
-pred = prediction_matrix @ weights
+target_hour = pred_row.start.hour
+pred = prediction_matrix[row] @ weights_by_hour[target_hour]
 ```
 
-其中 `prediction_matrix` 的行顺序与 `pred_rows` 一致，`pred_rows` 的顺序来自样例提交结构。
+其中 `prediction_matrix` 的行顺序与 `pred_rows` 一致，`pred_rows` 的顺序来自样例提交结构。`target_hour` 是待预测窗口的公开时间字段，例如 `08`, `09`, `17`, `18`，不是目标红窗真实流量。
 
 ## 禁止使用的数据
 
