@@ -27,10 +27,14 @@
 | 观察窗后验校正 phase1 直选最佳 | `0.114456` | phase1 sweep 选出 | exploratory 上界，暂不晋升 |
 | 观察窗后验校正 rolling 支持配置 | 约 `0.11583` | train1 rolling 支持更强 | 下一步最值得整理成正式候选 |
 | 神经先验门控融合 | `0.114758` | phase1 探索结果；seed 敏感且暂无 rolling 协议 | 值得继续验证，暂不晋升 |
+| 五节点 PyTorch GNN | `0.133801` | 无泄露 phase1 | 显著对照路线：相对较好的直接神经/图模型，但与当前主路线差距大 |
+| `src2` Transformer 直接序列预测 | `0.191686` | 无泄露 phase1 评分；初始 CPU 探索 | 发散对照基线，弱于当前主路线 |
+| `src2` LSTM 直接序列预测 | `0.193614` | 无泄露 phase1 评分；初始 CPU 探索 | 发散对照基线，弱于当前主路线 |
 
 更完整的路线状态、低优先级路线和下一步建议见：
 
 - [当前已得到方案整理](route_exploration_candidates.md)
+- [src2 LSTM / Transformer 探索日志](experiments/src2_exploration_log.md)
 
 ## 泄露边界
 

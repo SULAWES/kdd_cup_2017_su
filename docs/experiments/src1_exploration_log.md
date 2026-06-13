@@ -357,10 +357,12 @@ PyTorch `2.12.0+cpu` was installed into `.venv`. The model uses learnable node e
 
 Best PyTorch GNN phase1 MAPE: `0.133801`.
 
-This is a real improvement over the numpy GCN prototype (`0.172921`), but still much worse than:
+This should be kept as a prominent comparison route rather than buried as a generic failed experiment. It is the best direct GNN tried so far and is clearly better than the numpy GCN prototype (`0.172921`) and most direct neural predictors, but it still remains much worse than:
 
 - current single-model ExtraTrees low-volume-block: `0.120175`
 - current official hour-weight ensemble: `0.116167`
+
+In other words, PyTorch improved the graph-neural implementation materially, but the gap to the tabular/tree ensemble is still about `0.0176` absolute MAPE. The result is useful because it answers the graph-model question with evidence: a GNN can learn some signal, but the available five-node tollgate graph is too small and too weakly structured to beat the current main route.
 
 ### Conclusion
 
@@ -481,7 +483,8 @@ Current decision:
 - Treat the phase1-best observation-adjusted result `0.114456` as an exploratory upper bound because the exact configuration was selected from the phase1 sweep.
 - Treat the rolling-supported observation-adjusted route around `0.11583` as the best candidate for the next formalization pass.
 - Keep trajectory-capped blending as a useful supporting candidate, not the main promotion target.
-- Keep the five-node graph/GCN route documented as a tried but currently low-priority direction.
+- Keep PyTorch GNN documented as a prominent contrast route: it is the strongest direct graph-neural attempt at `0.133801`, far behind the main route but still meaningfully better than the earlier numpy GCN.
+- Keep the other five-node graph/GCN variants documented as tried but currently low-priority directions.
 
 ## Results: 2026-06-13 Additional Neural-Network Exploration
 

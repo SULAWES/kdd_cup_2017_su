@@ -27,8 +27,10 @@
 | 观察窗后验校正，phase1 直选最佳 | `0.114456` | 分数很强，但配置由 phase1 sweep 选出 | exploratory 上界 |
 | 观察窗后验校正，rolling 支持配置 | 约 `0.11583` | 选择更接近 train1-only 协议 | 最值得继续验证 |
 | 神经先验门控融合 | `0.114758` | phase1 探索结果，seed 敏感，尚无 rolling 协议 | 值得继续验证，暂不晋升 |
-| 五节点 PyTorch GNN | `0.133801` | 无泄露 phase1 | 暂停，不作为主线 |
+| 五节点 PyTorch GNN | `0.133801` | 无泄露 phase1 | 显著对照路线：和主路线差距大，但在直接神经路线中相对较好 |
 | 图卷积特征 + ExtraTrees | `0.121563` | 无泄露 phase1 | 弱于单模型，暂停 |
+| `src2` Transformer 直接序列预测 | `0.191686` | 无泄露 phase1 评分；初始 CPU 探索 | 发散对照基线，暂不晋升 |
+| `src2` LSTM 直接序列预测 | `0.193614` | 无泄露 phase1 评分；初始 CPU 探索 | 发散对照基线，暂不晋升 |
 | direct LGBM/HGB/XGB global | `0.159851` 级别 | 无泄露 phase1 | 单独模型弱，仅可作融合多样性参考 |
 | history_blend | `0.119564` | 权重来自 phase1 调参 | 只作上界参考 |
 
@@ -206,9 +208,48 @@ seed 稳定性检查：
 - 它仍然是 phase1 探索结果，且 seed 敏感。
 - 暂不晋升。下一步应补 train1-only rolling 版本，并缓存候选矩阵以减少重复训练成本。
 
+## 显著对照路线：PyTorch GNN
+
+这条路线需要在讲解和后续交接中更明确地保留。它不是当前主线，也不接近当前 SOTA，但它是“尝试图神经网络方向后得到的相对较好结果”，能说明为什么最终没有把 GNN 作为核心方案。
+
+实现位置：
+
+- `run_task2_torch_graph_exp.py`
+- `src1/kddcup2017_task2_exp/torch_gcn.py`
+
+核心做法：
+
+- 将五个 `(tollgate_id, direction)` 组合视为图节点。
+- 每个目标时间窗形成一个小图样本。
+- 节点特征来自当前 tabular feature builder 的合法特征。
+- 模型使用可学习 node embedding，加上 self/neighbor message passing、LayerNorm 和 Dropout。
+- 邻接矩阵尝试了 `identity`、`topology`、`corr` 和 `full`。
+
+代表结果：
+
+| 配置 | Internal MAPE | Phase1 MAPE |
+| --- | ---: | ---: |
+| `full`, hidden `64`, dropout `0.0`, lr `0.003` | `0.147408` | `0.133801` |
+| `topology`, hidden `64`, dropout `0.0`, lr `0.003` | `0.150532` | `0.135571` |
+| `corr`, hidden `128`, dropout `0.1`, lr `0.001` | `0.153298` | `0.136018` |
+| `identity`, hidden `64`, dropout `0.1`, lr `0.003` | `0.147753` | `0.142225` |
+
+对照意义：
+
+- 相比 numpy pure GCN 的 `0.172921`，PyTorch GNN 明显更好，说明方向不是完全无效。
+- 相比 direct tabular/sequence NN 中大量 `0.145+` 或更差的结果，PyTorch GNN 属于较好的直接神经网络路线。
+- 但它仍明显弱于当前正式四模型 hour 融合 `0.116167`，也弱于单模型 ExtraTrees `0.120175`。
+- 主要瓶颈不是 PyTorch 实现质量，而是图本身只有五个节点，人工拓扑关系太弱，message passing 容易抹掉收费站/方向的个体差异。
+
+当前判断：
+
+- 保留为“GNN 方向的最佳直接模型对照”。
+- 不作为短期冲分主线。
+- 如果未来继续图方向，应优先构造更有信息量且合规的 route/trajectory 上游关系图，而不是继续在五节点 tollgate graph 上调参。
+
 ## 已尝试但低优先级路线
 
-### 1. 五节点 GCN / 图卷积
+### 1. 其他五节点 GCN / 图卷积
 
 实现位置：
 
@@ -225,10 +266,9 @@ seed 稳定性检查：
 | --- | ---: |
 | numpy pure GCN | `0.172921` |
 | graph-convolved features + ExtraTrees | `0.121563` |
-| PyTorch GNN | `0.133801` |
 | PyTorch graph meta-ensemble | `0.125859` |
 
-判断：当前五个 tollgate-direction 节点太少，人工图结构弱，图平滑容易抹掉 combo 差异。除非引入更丰富且合法的 route/trajectory 上游关系图，否则不建议继续作为主线。
+判断：除 PyTorch GNN 可作为显著对照路线保留外，其他五节点图路线目前收益有限。当前五个 tollgate-direction 节点太少，人工图结构弱，图平滑容易抹掉 combo 差异。除非引入更丰富且合法的 route/trajectory 上游关系图，否则不建议继续作为主线。
 
 ### 2. 直接神经网络预测
 
@@ -236,6 +276,8 @@ seed 稳定性检查：
 
 - `run_task2_torch_nn_exp.py`
 - `src1/kddcup2017_task2_exp/torch_nn_exp.py`
+- `run_task2_src2_nn_exp.py`
+- `src2/kddcup2017_task2_exp2/sequence_nn_exp.py`
 
 代表结果：
 
@@ -244,9 +286,18 @@ seed 稳定性检查：
 | tabular MLP / ResNet 直接预测 | `0.145551` |
 | sequence Conv1D 直接预测 | `0.164807` |
 | sequence GRU 直接预测 | `0.282066` 级别 |
+| `src2` Transformer 直接序列预测 | `0.191686` |
+| `src2` LSTM 直接序列预测 | `0.193614` |
 | neural residual calibrator | `0.120547` |
 
-判断：直接神经网络在该小样本表格问题上泛化较差；神经残差校准会改善 calibration MAPE 但伤害 phase1。相比之下，带先验约束的 neural gate 更值得继续。
+`src2` 的两次新增发散探索使用同一套合法 phase1 边界：训练只用 train1 标签，内部 early stopping 的 holdout 周只暴露同日绿色观察窗，train2 标签只在最后评分。当前 CPU 初始结果如下：
+
+| 模型 | 配置 | Internal MAPE | Phase1 MAPE | 结论 |
+| --- | --- | ---: | ---: | --- |
+| Transformer | hidden `64`, dropout `0.1`, lr `0.001` | `0.240544` | `0.191686` | 两次 src2 探索中较好，但仍远弱于树模型 |
+| LSTM | hidden `32`, dropout `0.0`, lr `0.003` | `0.220117` | `0.193614` | 比 smoke 稳定，但不具备竞争力 |
+
+判断：直接神经网络在该小样本表格/序列问题上泛化较差；`src2` LSTM / Transformer 能跑通，但只是发散对照基线。神经残差校准会改善 calibration MAPE 但伤害 phase1。相比之下，带先验约束的 neural gate 更值得继续。
 
 ### 3. Direct Boosting 替换
 

@@ -15,10 +15,11 @@
 
 最近探索结论：
 
-- 五节点 GCN/图卷积方向已经试过，当前效果明显弱于树模型融合；最好 PyTorch GNN phase1 MAPE 约 `0.133801`，不建议作为近期主线。
+- 五节点 PyTorch GNN 是图方向的显著对照路线：最好 phase1 MAPE 约 `0.133801`，明显弱于树模型融合和当前 SOTA，但显著好于早期 numpy GCN 与多数直接神经预测。它适合用于说明“为什么尝试过 GNN 但不选作主线”。
 - 轨迹数据作为第五候选有合法增量信号。block 融合 + trajectory cap `0.15` 的 phase1 MAPE 约 `0.115924`，但 train1 rolling 支持不够稳定，暂未晋升。
 - 同日绿色观察窗强弱的后验校正最有潜力。phase1 直选最好约 `0.114456`；train1 rolling 支持的保守路线约 `0.11583`。该路线仍在 `src1`，尚未正式迁入 `src`。
 - 新增非图神经网络探索：直接 tabular/sequence 网络效果较弱；神经先验门控融合目前最好 phase1 约 `0.114758`，但 seed 敏感且尚无 rolling 选择协议，暂不晋升。
+- 新增 `src2` 发散序列神经网络探索：LSTM / Transformer 直接序列预测已能端到端运行；当前最好初始 CPU phase1 探索分数分别约 `0.193614` / `0.191686`，明显弱于正式树模型路线，仅作对照基线。
 - 当前用户明确要求：先不晋升到 `src`，先整理已得到路线并同步文档。后续 Agent 不应直接把 observation adjustment 或 trajectory route 合并进正式实现，除非用户再次明确要求。
 
 ## 必须遵守的数据合规规则
@@ -68,6 +69,7 @@
 - `run_task2_torch_graph_exp.py`：PyTorch GNN 实验入口。
 - `run_task2_torch_meta_exp.py`：PyTorch 图 meta-ensemble 实验入口。
 - `run_task2_torch_nn_exp.py`：非图神经网络探索入口，包含 direct tabular/sequence、神经残差校准和神经先验门控融合。
+- `run_task2_src2_nn_exp.py`：`src2` LSTM / Transformer 直接序列神经网络探索入口。
 - `run_task2_traj_exp.py`：轨迹聚合特征单模型实验入口。
 - `run_task2_traj_ensemble_exp.py`：轨迹作为第五融合候选的实验入口。
 - `run_task2_traj_rolling_exp.py`：轨迹 capped 融合的 train1 rolling 检查入口。
@@ -94,13 +96,14 @@
 - `docs/sota/four_model_ensemble_detailed.md`：当前正式 SOTA 的详细技术说明。
 - `docs/sota/four_model_ensemble_data_usage.md`：当前正式 SOTA 的数据处理和数据使用说明。
 - `docs/sota/four_model_ensemble_getting_started.md`：给不了解项目的人看的入门文档，重点解释数据、审题、流程和方案演进。
-- `docs/experiments/src1_exploration_log.md`：`src1` 探索日志，包含调参、融合、rolling、GCN、轨迹、观察窗后验校正等实验记录。
+- `docs/experiments/src1_exploration_log.md`：`src1` 探索日志，包含调参、融合、rolling、PyTorch GNN/GCN、轨迹、观察窗后验校正等实验记录。
+- `docs/experiments/src2_exploration_log.md`：`src2` 探索日志，包含 LSTM / Transformer 直接序列预测的命令、边界和结果。
 
 ## 接手建议
 
 1. 先运行 `git status --short`，确认是否有用户未提交文件；不要回滚或覆盖不属于自己的改动。
 2. 读 `README.md` 和 `docs/sota/four_model_ensemble_getting_started.md`，理解正式方案。
 3. 读 `docs/routes_overview.md` 和 `docs/route_exploration_candidates.md`，先分清正式 SOTA、探索上界和 rolling 支持候选。
-4. 读 `docs/experiments/src1_exploration_log.md` 的最新章节，了解尚未晋升的实验细节和命令。
+4. 读 `docs/experiments/src1_exploration_log.md` 和 `docs/experiments/src2_exploration_log.md` 的最新章节，了解尚未晋升的实验细节和命令。
 5. 若继续冲分，优先完善“观察窗后验校正”路线的无泄露选择协议；在用户明确同意前，不要迁入 `src/`。
-6. 若要讲解项目，优先使用“审题 -> 合规数据边界 -> ExtraTrees 基线 -> 四模型融合 -> rolling 选择 hour 权重 -> 轨迹第五候选 -> 观察窗后验校正探索”的顺序。
+6. 若要讲解项目，优先使用“审题 -> 合规数据边界 -> ExtraTrees 基线 -> 四模型融合 -> rolling 选择 hour 权重 -> PyTorch GNN 显著对照 -> 轨迹第五候选 -> 观察窗后验校正探索”的顺序。

@@ -86,8 +86,15 @@ python run_task2.py --no-prune-features validate
 - trajectory 作为第五融合候选，phase1 最好约 `0.115924`，rolling 支持不够稳定。
 - 同日绿色观察窗强弱后验校正，phase1 直选最好约 `0.114456`，rolling 支持配置约 `0.11583`。
 - 神经先验门控融合，phase1 最好约 `0.114758`，但 seed 敏感且尚未做 train1 rolling 选择协议。
+- 五节点 PyTorch GNN，phase1 最好约 `0.133801`。它明显弱于当前主路线，但作为直接图神经网络路线显著好于早期 numpy GCN 和多数直接神经预测，适合作为“为什么不选 GNN 主线”的重点对照。
 
-路线归档见 `docs/route_exploration_candidates.md`，完整实验日志见 `docs/experiments/src1_exploration_log.md`。
+最新 `src2/` 是第二个隔离探索区，用于更发散的直接序列神经网络尝试：
+
+- LSTM 直接序列预测，当前最好初始 CPU phase1 探索分数约 `0.193614`。
+- Transformer 直接序列预测，当前最好初始 CPU phase1 探索分数约 `0.191686`。
+- 两者只作为可运行对照基线，明显弱于正式树模型/融合路线，不晋升到 `src/`。
+
+路线归档见 `docs/route_exploration_candidates.md`，`src1` 完整实验日志见 `docs/experiments/src1_exploration_log.md`，`src2` 实验日志见 `docs/experiments/src2_exploration_log.md`。
 
 提交文件按 `submission_sample_volume.csv` 的行顺序生成，只把样例日期平移到 phase2 预测日期，避免位置式评分或检查脚本错配 key。
 
