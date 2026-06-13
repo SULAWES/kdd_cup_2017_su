@@ -9,10 +9,10 @@ for extra_path in (ROOT / "src", ROOT / "src1"):
         sys.path.insert(0, str(extra_path))
 
 try:
-    from kddcup2017_task2_exp.experiments import main
+    from kddcup2017_task2_exp.graph_gcn import main
 except ImportError as exc:
     raise SystemExit(
-        "run_task2_exp.py requires numpy, scikit-learn, scipy, and optional xgboost/lightgbm. "
+        "run_task2_graph_exp.py requires numpy, scikit-learn, and scipy. "
         "Create .venv and install dependencies with: "
         ".venv\\Scripts\\python -m pip install -r requirements.txt"
     ) from exc

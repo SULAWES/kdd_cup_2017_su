@@ -2,6 +2,7 @@ __pycache__/
 *.py[cod]
 
 outputs/
+.venv/
 .codex_deps/
 
 .DS_Store

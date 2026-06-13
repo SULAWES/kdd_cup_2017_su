@@ -25,13 +25,20 @@ Task 2 的提交格式为 420 行：
 
 ## 运行
 
+建议使用工作区本地虚拟环境：
+
+```sh
+python -m venv .venv
+.venv\Scripts\python -m pip install -r requirements.txt
+```
+
 默认模型使用 `scikit-learn` 的 `ExtraTreesRegressor`，目标值默认做 `log1p` 变换。代码仍保留无外部依赖的 `numpy` 岭回归 fallback。
 
 ```sh
-python run_task2.py validate
-python run_task2.py predict
-python run_task2.py validate-ensemble
-python run_task2.py predict-ensemble
+.venv\Scripts\python run_task2.py validate
+.venv\Scripts\python run_task2.py predict
+.venv\Scripts\python run_task2.py validate-ensemble
+.venv\Scripts\python run_task2.py predict-ensemble
 ```
 
 可切换模型：
@@ -73,6 +80,14 @@ python run_task2.py --no-prune-features validate
 - `extra + block + raw` 验证 MAPE：约 `0.137534`
 - `lgbm + global + log` 验证 MAPE：约 `0.147154`
 - `ridge + global + raw` 验证 MAPE：约 `0.196292`
+
+最新 `src1/` 探索仍未晋升到正式 `src/`，但已整理出两条值得继续推进的候选：
+
+- trajectory 作为第五融合候选，phase1 最好约 `0.115924`，rolling 支持不够稳定。
+- 同日绿色观察窗强弱后验校正，phase1 直选最好约 `0.114456`，rolling 支持配置约 `0.11583`。
+- 神经先验门控融合，phase1 最好约 `0.114758`，但 seed 敏感且尚未做 train1 rolling 选择协议。
+
+路线归档见 `docs/route_exploration_candidates.md`，完整实验日志见 `docs/experiments/src1_exploration_log.md`。
 
 提交文件按 `submission_sample_volume.csv` 的行顺序生成，只把样例日期平移到 phase2 预测日期，避免位置式评分或检查脚本错配 key。
 
