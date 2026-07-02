@@ -31,7 +31,12 @@ class ExplanationCard:
     key_result: str
     interpretation: str
     next_step: str
+    data_visibility: str = (
+        "使用统一 visibility context：训练或校准只访问 train1 / rolling train 标签与目标日前绿色观察窗；"
+        "验证红窗真实值只用于固定输出后的诊断评分。"
+    )
     artifacts: Sequence[str] = field(default_factory=tuple)
+    explain_card_filename: str | None = None
 
     def to_markdown(self) -> str:
         metric_lines = "\n".join(f"- `{key}`: {value}" for key, value in self.metrics.items()) or "- 无"
@@ -43,6 +48,8 @@ class ExplanationCard:
                 f"**假设（Hypothesis）:** {self.hypothesis}",
                 "",
                 f"**方法（Method）:** {self.method}",
+                "",
+                f"**数据可见性（Data visibility）:** {self.data_visibility}",
                 "",
                 f"**可证伪预期（Expected falsification）:** {self.expected_falsification}",
                 "",
@@ -66,7 +73,15 @@ def write_explanation_card(output_dir: Path, card: ExplanationCard) -> Path:
     card_dir = output_dir / "cards"
     card_dir.mkdir(parents=True, exist_ok=True)
     path = card_dir / f"{safe_slug(card.name)}.md"
-    path.write_text(card.to_markdown(), encoding="utf-8")
+    content = card.to_markdown()
+    path.write_text(content, encoding="utf-8")
+    explain_path = explain_dir(output_dir) / (
+        card.explain_card_filename
+        if card.explain_card_filename
+        else f"{safe_slug(card.name.removeprefix('explain_'))}_card.md"
+    )
+    explain_path.parent.mkdir(parents=True, exist_ok=True)
+    explain_path.write_text(content, encoding="utf-8")
     return path
 
 
@@ -81,6 +96,44 @@ def combo_name(combo: tuple[str, str]) -> str:
 def combo_tuple(name: str) -> tuple[str, str]:
     tollgate, direction = name.split("_", 1)
     return tollgate, direction
+
+
+def topology_edge_pairs(combos: Sequence[str], directed: bool = True) -> list[tuple[str, str]]:
+    parsed = {combo: combo_tuple(combo) for combo in combos}
+    edges: list[tuple[str, str]] = []
+    for left in combos:
+        for right in combos:
+            if left == right:
+                continue
+            left_tuple = parsed[left]
+            right_tuple = parsed[right]
+            if left_tuple[0] == right_tuple[0] or left_tuple[1] == right_tuple[1]:
+                if not directed and combos.index(right) < combos.index(left):
+                    continue
+                edges.append((left, right))
+    return edges
+
+
+def all_directed_edges(combos: Sequence[str]) -> list[tuple[str, str]]:
+    return [(left, right) for left in combos for right in combos if left != right]
+
+
+def late_evening_mask(rows: Sequence[Mapping[str, str]]) -> np.ndarray:
+    return np.asarray(
+        [
+            row.get("combo") == "1_0"
+            and row.get("block") == "evening"
+            and row.get("slot") in {"18:20", "18:40"}
+            for row in rows
+        ],
+        dtype=bool,
+    )
+
+
+def low_volume_mask(rows: Sequence[Mapping[str, str]], quantile: float = 0.25) -> np.ndarray:
+    actual = np.asarray([float(row.get("actual", 0.0)) for row in rows], dtype=float)
+    cut = float(np.quantile(actual, quantile)) if len(actual) else 0.0
+    return actual <= cut
 
 
 def phase1_candidate_frame(data_dir: Path, output_dir: Path, force_cache: bool = False) -> list[dict[str, str]]:
