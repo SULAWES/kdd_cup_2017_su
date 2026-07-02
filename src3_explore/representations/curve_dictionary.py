@@ -10,8 +10,9 @@ from scipy.optimize import nnls
 
 from kddcup2017_task2.data import OBS_TIMES, block_name, combine_date_time, target_volume
 
-from src3_explore.common.metrics import mape_value
+from src3_explore.common.metrics import mape_value, summarize_errors
 from src3_explore.common.reporting import ExperimentCard, write_card, write_csv
+from src3_explore.common.svg import write_bar_svg
 from src3_explore.common.visibility import load_phase1_context, load_train1_latest_fold_context
 
 
@@ -110,6 +111,8 @@ def predict_rows_from_basis(context, basis: CurveBasis) -> tuple[list[dict[str, 
                 "slot": f"{row.start.hour:02d}:{row.start.minute:02d}",
                 "actual": f"{y:.6f}",
                 "prediction": f"{p:.6f}",
+                "signed_error": f"{p - y:.6f}",
+                "abs_pct_error": f"{abs(p - y) / max(abs(y), 1.0):.6f}",
             }
         )
     return rows, mape_value(actual, pred)
@@ -119,6 +122,7 @@ def run(data_dir: Path, output_dir: Path, force_cache: bool = False) -> Experime
     train_context = load_train1_latest_fold_context(data_dir)
     phase1_context = load_phase1_context(data_dir)
     summary = []
+    grouped_rows = []
     artifacts = []
     for kind in ("pca", "nmf", "dictionary"):
         train_curves, _ = day_combo_curves(train_context.train_agg, train_context.train_days, train_context.combos)
@@ -132,6 +136,14 @@ def run(data_dir: Path, output_dir: Path, force_cache: bool = False) -> Experime
         write_csv(train_csv, train_rows)
         write_csv(phase1_csv, phase1_rows)
         artifacts.extend([str(train_csv), str(phase1_csv)])
+        for context_name, rows in (("train1_latest_fold", train_rows), ("phase1_observation", phase1_rows)):
+            for fields in (["combo"], ["block"], ["slot"], ["combo", "block"]):
+                for item in summarize_errors(rows, fields):
+                    item["basis"] = kind
+                    item["context"] = context_name
+                    item["dimension"] = "/".join(fields)
+                    item["value"] = "/".join(str(item.pop(field)) for field in fields)
+                    grouped_rows.append(item)
         summary.append(
             {
                 "basis": kind,
@@ -141,21 +153,33 @@ def run(data_dir: Path, output_dir: Path, force_cache: bool = False) -> Experime
             }
         )
     summary_csv = output_dir / "representations" / "curve_dictionary_summary.csv"
+    grouped_csv = output_dir / "representations" / "curve_dictionary_grouped_errors.csv"
+    chart = output_dir / "representations" / "curve_dictionary_phase1_mape.svg"
     write_csv(summary_csv, summary)
-    artifacts.append(str(summary_csv))
+    write_csv(grouped_csv, grouped_rows)
+    write_bar_svg(
+        chart,
+        [
+            {"label": row["basis"], "mape": row["phase1_observation_mape"]}
+            for row in sorted(summary, key=lambda item: float(item["phase1_observation_mape"]), reverse=True)
+        ],
+        "label",
+        "mape",
+        "Curve dictionary phase1 MAPE",
+    )
+    artifacts.extend([str(summary_csv), str(grouped_csv), str(chart)])
     best = min(summary, key=lambda row: float(row["train1_latest_fold_mape"]))
     card = ExperimentCard(
         name="curve_dictionary",
-        hypothesis="A small dictionary of day-combo curves may recover red-window shape from green-window shape.",
+        hypothesis="day × combo 的 72-slot 日内曲线可能由少量基表示；如果绿色观察窗能拟合 pattern weight，就可能补全红窗形状。",
         data_visibility=(
-            "Curve bases are fitted on train labels only. Validation days expose only green slots for coefficient "
-            "fitting; red labels are used only for scoring the reconstructed slots."
+            "曲线基只用训练标签拟合；验证日只暴露绿色 slot 来拟合系数，红窗标签只在补全后用于评分。"
         ),
-        prototype="Fit PCA/NMF/dictionary bases over 72-slot day curves and reconstruct target red slots from 6 green slots.",
+        prototype="在 72-slot day curves 上拟合 PCA、NMF、DictionaryLearning，用 6 个 green slot 反推系数并重建红窗。",
         metrics={"best_train1_basis": best["basis"], "best_train1_mape": best["train1_latest_fold_mape"]},
-        result=f"Wrote dictionary summaries to {summary_csv}.",
-        insight="This is a pattern-completion baseline; failure cases identify days whose shape is not in the train dictionary.",
-        next_step="Join dictionary residuals with green shape clusters and holiday/post-holiday regimes.",
+        result=f"最佳 train1 fold 基为 {best['basis']}，MAPE={best['train1_latest_fold_mape']}；整体说明仅靠 6 个 green slot 做全天曲线补全过于欠定。",
+        insight="即使分数弱，也能识别哪些日期/组合的日内形状不在训练字典里，并判断 NMF 这类非负形状是否比 PCA 更可解释。",
+        next_step="归档为表示诊断。除非与 green shape cluster 或节假日 regime 明确重合，否则不扩展为主预测模型。",
         artifacts=tuple(artifacts),
     )
     write_card(output_dir, card)
@@ -175,4 +199,3 @@ def main(argv: Sequence[str] | None = None) -> None:
 
 if __name__ == "__main__":
     main()
-

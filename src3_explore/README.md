@@ -1,96 +1,134 @@
-# src3_explore: Task 2 structure diagnostics
+# src3_explore：Task 2 结构诊断探索区
 
-`src3_explore/` is an isolated exploration workspace for understanding predictable structure, noise, anomalies, and model failure modes in KDD Cup 2017 Task 2. It does not replace or import changes into the official `src/`, `src1/`, or `src2/` routes.
+`src3_explore/` 是 KDD Cup 2017 Task 2 的独立探索工作区，用来系统理解任务中的可预测结构、噪声来源、异常机制和模型失效模式。它不替代、不迁入、也不污染正式 `src/`、`src1/`、`src2/` 路线。
 
-## Scope
+## 定位
 
-This workspace is not for short-term leaderboard tuning. Its default outputs are CSV files, small SVG charts, and experiment cards under `outputs/src3_explore/`.
+这个目录不是短期冲分区。默认产物是 CSV、轻量 SVG 图表和 experiment card，输出到 `outputs/src3_explore/`。
 
-Run one experiment:
+运行单个实验：
 
 ```powershell
 .\.venv\Scripts\python.exe -m src3_explore residual_atlas
 ```
 
-List experiments:
+列出实验：
 
 ```powershell
 .\.venv\Scripts\python.exe -m src3_explore list
 ```
 
-Run all prototypes:
+运行全部原型：
 
 ```powershell
 .\.venv\Scripts\python.exe -m src3_explore all
 ```
 
-Some experiments reuse the official four-model candidate matrix and may take as long as the ensemble validation path.
+部分实验会复用正式四模型候选矩阵，耗时接近 ensemble validation。
 
-## Visibility policy
+如果当前 Python 能导入 `xgboost`，candidate-cache 实验会使用正式四候选定义。若环境缺少 `xgboost`，`src3_explore.common.candidate_cache` 会保留相同候选列名，但用 HistGradientBoosting 作为 `xgb` 槽位的诊断 fallback。fallback 只用于残差结构诊断，不是正式 SOTA 分数。
 
-All modules should enter data through `src3_explore.common.visibility`:
+## 可见性边界
 
-- train1 rolling diagnostics train only on earlier train1 days and expose only held-out same-day green windows.
-- phase1 diagnostics train on train1 and expose test1 green windows.
-- train2 labels may be joined only after predictions are fixed, for final phase1 observation metrics.
-- phase2 rows are visible but unlabeled; test2 target red windows are never loaded as labels.
+所有实验应通过 `src3_explore.common.visibility` 进入数据：
 
-Phase1 numbers emitted here are diagnostic observations, not SOTA claims. Repeated phase1 sweeps must not be used to select parameters for the formal route.
+- train1 rolling 诊断：只用较早 train1 日期训练，held-out train1 日期只暴露同日绿色窗口。
+- phase1 诊断：只用 train1 标签训练，test1 绿色窗口作为合法输入。
+- train2 标签只能在预测固定后接入，用于 phase1 最终观察和评分。
+- phase2 行可见但无标签；绝不能读取 test2 红窗标签。
 
-## Modules
+这里输出的 phase1 数字都是诊断观察，不是 SOTA 声明。不能反复 sweep phase1 后把最优配置当作正式路线选择依据。
 
-| Area | Module | Purpose |
+## 模块索引
+
+| 区域 | 模块 | 作用 |
 | --- | --- | --- |
-| diagnostics | `residual_atlas.py` | Cache candidate predictions and summarize residuals by date, combo, hour, slot, green strength, ETC share, trajectory signal, and model disagreement. |
-| diagnostics | `model_disagreement.py` | Identify which candidate model is closest when candidate predictions disagree. |
-| diagnostics | `green_red_transfer_analysis.py` | Fit constrained 6x6 green-to-red transfer, cluster green shapes, and export ratio surfaces. |
-| diagnostics | `adversarial_validation.py` | Test distribution shift between train1, phase1-visible, phase2-visible, and time splits. |
-| representations | `curve_dictionary.py` | Use PCA/NMF/dictionary day curves to reconstruct red slots from green slots. |
-| representations | `day_embedding_clustering.py` | Build day embeddings and label regimes such as weekday/weekend, holiday/post-holiday, low-volume, ETC anomaly, and tollgate allocation anomaly. |
-| mechanisms | `route_arrival_kernel.py` | Study route/trajectory lead-lag kernels instead of continuing five-node GNN tuning. |
-| mechanisms | `tollgate12_allocation.py` | Analyze `z12 = y1 + y2` and `r2 = y2 / (y1 + y2)` for allocation anomalies. |
-| mechanisms | `etc_component_model.py` | Treat ETC, vehicle model, and vehicle type as generated sub-flow components and compare component reconciliation. |
-| probabilistic | `quantile_baselines.py` | Fit p10/p50/p90 quantile baselines and score coverage. |
-| probabilistic | `conformal_intervals.py` | Use train1 calibration residuals for conformal intervals and compare with ensemble spread. |
+| diagnostics | `residual_atlas.py` | 缓存候选模型预测，按 date、combo、hour、slot、绿窗强度、ETC 占比、轨迹信号、模型分歧汇总残差。 |
+| diagnostics | `model_disagreement.py` | 分析候选模型预测分歧，以及真实值在高分歧时更接近哪个模型。 |
+| diagnostics | `green_red_transfer_analysis.py` | 拟合受约束 6x6 green-to-red transfer，聚类 green shape，并导出 ratio surface。 |
+| diagnostics | `adversarial_validation.py` | 检测 train1、phase1-visible、phase2-visible 和不同时段之间的分布偏移。 |
+| representations | `curve_dictionary.py` | 用 PCA/NMF/dictionary day curve 从绿色窗口重建红窗。 |
+| representations | `day_embedding_clustering.py` | 构造 day embedding，标记 weekday/weekend、holiday/post-holiday、low-volume、ETC anomaly、allocation anomaly 等 regime。 |
+| mechanisms | `route_arrival_kernel.py` | 研究 route/trajectory lead-lag kernel，不继续五节点 GNN 调参。 |
+| mechanisms | `tollgate12_allocation.py` | 分析 `z12 = y1 + y2` 和 `r2 = y2 / (y1 + y2)`，定位 allocation anomaly。 |
+| mechanisms | `etc_component_model.py` | 把 ETC、vehicle model、vehicle type 当作生成分量，比较 component-level green→red 关系。 |
+| probabilistic | `quantile_baselines.py` | 训练 p10/p50/p90 分位数基线，并评估 coverage 与 failure cases。 |
+| probabilistic | `conformal_intervals.py` | 用 train1 calibration residual 构造 conformal interval，并与 ensemble spread 对齐。 |
 
-## Initial interpretation from existing docs
+## Experiment card 模板
 
-Likely true signal:
+每个实验都写一个 card，路径为 `outputs/src3_explore/cards/<experiment>.md`。统一字段如下：
 
-- Same-day green observation strength is a real, problem-aligned signal. Existing `src1` observation posterior adjustment is the strongest candidate, but it still needs train1-only selection before promotion.
-- The official four-model ensemble has useful error diversity, especially by target hour.
-- Route/trajectory data has incremental signal, but previous fifth-candidate blending was fold-dependent and should be treated as supporting evidence.
-- Low-volume regime behavior, especially around `1_0`, is a real failure mode for global models.
+- 假设（Hypothesis）：这个实验想验证什么。
+- 数据可见性（Data visibility）：是否只使用合法可见信息。
+- 最小实现（Prototype）：当前原型做了什么。
+- 预期洞察（Expected insight）：即使分数不好也能学到什么。
+- 指标（Metrics）：MAPE、signed error、calibration、regime 行为、uncertainty coverage 等。
+- 结果（Result）：现象总结，不只写一个分数。
+- 下一步（Next）：保留、扩展、归档还是放弃。
+- 产物（Artifacts）：CSV、SVG 和明细表路径。
 
-Likely noise or low-priority directions:
+## 最近一次本地运行
 
-- Direct LSTM and Transformer sequence models in `src2` are runnable but far behind the tree ensemble.
-- Most direct tabular/sequence neural predictors are weak on this small tabular dataset.
-- The five-node tollgate GNN is a useful contrast result, not a route to keep tuning in place.
-- Weather and broad feature re-addition have not shown stable gain in the formal route.
+运行日期：2026-07-02。
 
-Worth continuing:
+命令：
 
-- Train1-only protocol for green observation posterior adjustment.
-- Mechanism checks that connect residuals to green strength, route lead-lag counts, ETC/component shifts, and tollgate 1/2 allocation.
-- Uncertainty diagnostics where model disagreement or conformal intervals identify failure cases before seeing labels.
+```powershell
+python -m src3_explore all --force-cache
+```
 
-Archive unless new evidence appears:
+运行产物：
 
-- Further five-node GNN hyperparameter tuning without richer route/trajectory graph structure.
-- Phase1-selected caps, beta values, or neural gate scales without rolling support.
-- Direct neural sequence prediction as a replacement for the current tree/ensemble route.
+- cards：`outputs/src3_explore/cards/`
+- CSV 和 SVG：`outputs/src3_explore/{diagnostics,representations,mechanisms,probabilistic}/`
+- 候选预测缓存：`outputs/src3_explore/cache/`
 
-## Output contract
+环境说明：本次运行使用 `candidate_backend=official_xgboost`，当前系统 Python 可导入 `xgboost 3.3.0`。这些仍是 `src3_explore` 诊断观察，不替代正式 `run_task2.py validate-ensemble` 口径。
 
-Every experiment writes an experiment card with:
+关键现象：
 
-- hypothesis
-- data visibility
-- prototype
-- metrics
-- result
-- insight
-- next step
+- Candidate cache：最新 train1 calibration MAPE 为 `0.136385`；phase1 observation MAPE 为 `0.116640`。
+- Residual atlas：最差 phase1 分组集中在 `slot=18:40` MAPE `0.1893`、`combo=1_0` MAPE `0.1640`、`hour=18` MAPE `0.1571`、`slot=18:20` MAPE `0.1554`。
+- Model disagreement：真实值最近的候选分布为 `low_volume_block=127`、`mlp=90`、`ratio_lag_7=107`、`xgb=96`。候选多样性是真信号，高分歧失败样本主要集中在低流量 `1_0` 晚高峰和部分 `2_0` 晚高峰。
+- Green-red transfer：受约束 6x6 transfer 单独预测较弱，train1 fold MAPE `0.254261`，phase1 MAPE `0.285728`。最差分组为 `1_0/evening`，说明简单线性迁移更适合诊断而不是直接建模。
+- Curve dictionary：NMF 是最不差的曲线补全基线，train1 fold MAPE `0.389873`，phase1 MAPE `0.466793`；PCA 和普通 dictionary 更弱。只用 6 个 green slot 补全日曲线过于欠定。
+- Day embedding：聚类能分出 holiday/ETC/allocation regime。holiday low-volume cluster 的 ETC share 约 `0.12-0.14`，`r2_allocation` 约 `0.05`；正常或节后 cluster 的 `r2_allocation` 约 `0.58-0.61`。
+- Route arrival kernel：最强 raw lead-lag correlation 的 `abs(corr)=0.398081`，对应 `A -> tollgate 2` 的 evening long lag。轨迹有机制信号，但不是简单单调 count 特征。
+- Tollgate 1/2 allocation：当前 broad threshold 下，train1 有 `99` 个 allocation flags，phase1 最终观察有 `7` 个。它适合作为 residual join key，不足以直接证明计量错误。
+- ETC/component model：component-sum ratio 单独较弱，ETC/model/vehicle type 的 phase1 MAPE 都约 `0.193`；vehicle model 在 train1 fold 上略好。
+- Quantile baseline：p10-p90 phase1 coverage 为 `0.761905`，低于名义 80%；wide interval 覆盖好于 narrow interval，说明 uncertainty width 有信号但仍未充分校准。
+- Conformal interval：split conformal radius 为 `25.647037`，phase1 coverage `0.961905`，mean width `51.230316`。覆盖偏保守，pooled radius 缺少自适应。
+- Adversarial validation：AUC 很高（`0.984094` 到 `1.000000`），但 `day_of_month` 主导特征重要性。需要去除绝对日期特征后再解释为真实交通分布偏移。
 
-Metrics should include more than pooled MAPE where possible: signed error, grouped error, coverage, regime-specific behavior, and failure-case rows.
+## 当前判断
+
+真信号：
+
+- 同日绿色观察窗强弱是最强、最合题意的信号；`src1` observation posterior adjustment 仍是最值得继续 formalize 的候选。
+- 四模型候选存在真实错误多样性，尤其按 hour 和低流量 regime。
+- route/trajectory 有机制增量，但 raw lead-lag 相关性中等，不能直接替代树模型。
+- `1_0` 低流量和晚高峰晚 slot 是稳定 failure mode。
+- tollgate 1/2 allocation 与车辆 component mix 对解释残差有价值，但 standalone 生成模型不强。
+
+更像噪声或低优先级：
+
+- 直接 LSTM/Transformer 序列模型在 `src2` 可运行但远弱于当前树模型融合。
+- 继续五节点 tollgate GNN 调参价值低；已有 PyTorch GNN 是重要对照，不是主线。
+- 只靠 6 个 green slot 做 PCA/dictionary 曲线补全过弱。
+- naive 6x6 green-red transfer 对 `1_0` evening 和 late slots 太粗。
+- component ratio generator 不适合作为独立主模型。
+
+值得继续：
+
+- 固化 observation posterior adjustment 的 train1-only 选择协议。
+- 把 residual_atlas 高误差行与 route kernel、allocation、ETC component 和 green shape cluster 做交叉诊断。
+- 做去除 `day_of_month` 后的 adversarial validation。
+- 把 quantile width、conformal miss 和 model disagreement 合成 train1-only 风险标签。
+
+应归档，除非有新证据：
+
+- 不带更丰富 route/trajectory 结构的五节点 GNN 继续调参。
+- phase1 sweep 选出的 cap、beta、gate scale。
+- 直接 neural sequence prediction 作为正式路线替代。
+- standalone PCA/dictionary reconstruction 或 standalone component-ratio generator。

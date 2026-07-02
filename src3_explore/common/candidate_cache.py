@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import importlib.util
 from collections import defaultdict
 from pathlib import Path
 from typing import Mapping, Sequence
 
 import numpy as np
 
-from kddcup2017_task2.data import OBS_TIMES, TargetRow, block_name, combine_date_time, project_paths, target_volume
+from kddcup2017_task2.data import OBS_TIMES, TargetRow, block_name, combine_date_time, make_target_rows, project_paths, target_volume
 from kddcup2017_task2.ensemble import (
     ENSEMBLE_MODEL_NAMES,
     apply_scoped_blend,
@@ -15,9 +16,14 @@ from kddcup2017_task2.ensemble import (
     filter_days,
     fit_ensemble_prediction_matrix,
     latest_training_fold_split,
+    mape_sample_weight,
     observation_windows_only,
     optimize_scoped_blend_weights,
+    predict_mlp,
+    predict_ratio_lag7,
 )
+from kddcup2017_task2.features import FeatureBuilder, Vectorizer
+from kddcup2017_task2.pipeline import DEFAULT_DROP_FEATURES, filter_features, train_and_predict
 
 from .metrics import bucket_quantiles, mape_value
 from .reporting import read_csv, write_csv
@@ -62,6 +68,98 @@ def green_strengths(rows: Sequence[TargetRow], known_agg: Mapping, expected: Map
     return np.asarray(strengths, dtype=float)
 
 
+def xgboost_available() -> bool:
+    return importlib.util.find_spec("xgboost") is not None
+
+
+def predict_xgb_diagnostic_fallback(x_train, y_log, x_pred, sample_weight):
+    from sklearn.ensemble import HistGradientBoostingRegressor
+
+    model = HistGradientBoostingRegressor(
+        max_iter=240,
+        learning_rate=0.035,
+        max_leaf_nodes=15,
+        l2_regularization=0.1,
+        min_samples_leaf=8,
+        random_state=13,
+    )
+    model.fit(x_train, y_log, sample_weight=sample_weight)
+    return np.maximum(np.expm1(model.predict(x_pred)), 0.0)
+
+
+def fit_prediction_matrix_visible(
+    train_agg,
+    known_agg,
+    weather,
+    train_attr_agg,
+    known_attr_agg,
+    train_days,
+    pred_rows: Sequence[TargetRow],
+    combos,
+):
+    if xgboost_available():
+        return fit_ensemble_prediction_matrix(
+            train_agg,
+            known_agg,
+            weather,
+            train_attr_agg,
+            known_attr_agg,
+            train_days,
+            pred_rows,
+            combos,
+        ), "official_xgboost"
+
+    predictions = {}
+    _, low_volume_preds, _, _ = train_and_predict(
+        train_agg,
+        known_agg,
+        weather,
+        train_attr_agg,
+        known_attr_agg,
+        train_days,
+        pred_rows,
+        combos,
+        "extra",
+        20.0,
+        "low_volume_block",
+        "log",
+        False,
+        0.3,
+        DEFAULT_DROP_FEATURES,
+    )
+    predictions["low_volume_block"] = low_volume_preds
+
+    train_rows = make_target_rows(train_days, combos)
+    y_train = np.asarray([target_volume(train_agg, row) for row in train_rows], dtype=float)
+    y_log = np.log1p(y_train)
+    sample_weight = mape_sample_weight(y_train)
+
+    builder = FeatureBuilder(train_agg, weather, include_weather=False)
+    builder.fit_stats(train_rows)
+    train_features = builder.transform(train_rows, train_agg, train_attr_agg)
+    pred_features = builder.transform(pred_rows, known_agg, known_attr_agg)
+    vectorizer = Vectorizer()
+    x_train = vectorizer.fit_transform(filter_features(train_features, DEFAULT_DROP_FEATURES))
+    x_pred = vectorizer.transform(filter_features(pred_features, DEFAULT_DROP_FEATURES))
+
+    predictions["xgb"] = predict_xgb_diagnostic_fallback(x_train, y_log, x_pred, sample_weight)
+    predictions["mlp"] = predict_mlp(x_train, y_log, x_pred)
+    predictions["ratio_lag_7"] = predict_ratio_lag7(
+        x_train,
+        y_train,
+        x_pred,
+        train_features,
+        pred_features,
+        sample_weight,
+    )
+    matrix = np.column_stack([predictions[name] for name in ENSEMBLE_MODEL_NAMES])
+    return (matrix, predictions), "diagnostic_hgb_fallback_for_missing_xgboost"
+
+
+def calibration_actual_values(train_agg: Mapping, rows: Sequence[TargetRow]) -> np.ndarray:
+    return np.asarray([target_volume(train_agg, row) for row in rows], dtype=float)
+
+
 def etc_share(row: TargetRow, known_attr_agg: Mapping) -> float:
     total = 0.0
     etc = 0.0
@@ -89,7 +187,7 @@ def build_prediction_payload(data_dir: Path):
         **calibration_train_attr,
         **attr_observation_windows_only(context.train_attr_agg, calibration_days),
     }
-    from kddcup2017_task2.data import make_target_rows, merge_aggregates, merge_attr_aggregates
+    from kddcup2017_task2.data import merge_aggregates, merge_attr_aggregates
 
     calibration_known = merge_aggregates(calibration_train, observation_windows_only(context.train_agg, calibration_days))
     calibration_known_attr = merge_attr_aggregates(
@@ -97,7 +195,7 @@ def build_prediction_payload(data_dir: Path):
         attr_observation_windows_only(context.train_attr_agg, calibration_days),
     )
     calibration_rows = make_target_rows(calibration_days, context.combos)
-    calibration_matrix, _ = fit_ensemble_prediction_matrix(
+    (calibration_matrix, _), calibration_backend = fit_prediction_matrix_visible(
         calibration_train,
         calibration_known,
         context.weather,
@@ -107,14 +205,14 @@ def build_prediction_payload(data_dir: Path):
         calibration_rows,
         context.combos,
     )
-    calibration_actual = np.asarray([target_volume(context.label_agg, row) for row in calibration_rows], dtype=float)
+    calibration_actual = calibration_actual_values(context.train_agg, calibration_rows)
     weights_by_scope, calibration_mape, _ = optimize_scoped_blend_weights(
         calibration_actual,
         calibration_matrix,
         calibration_rows,
         "hour",
     )
-    validation_matrix, candidate_predictions = fit_ensemble_prediction_matrix(
+    (validation_matrix, candidate_predictions), validation_backend = fit_prediction_matrix_visible(
         context.train_agg,
         context.known_agg,
         context.weather,
@@ -137,6 +235,8 @@ def build_prediction_payload(data_dir: Path):
         "validation_actual": validation_actual,
         "validation_prediction": validation_pred,
         "candidate_predictions": candidate_predictions,
+        "candidate_backend": validation_backend,
+        "calibration_backend": calibration_backend,
     }
 
 
@@ -202,6 +302,8 @@ def ensure_phase1_candidate_cache(data_dir: Path, output_dir: Path, force: bool 
             "value": f"{payload['calibration_mape']:.6f}",
         },
         {"metric": "phase1_observation_mape", "value": f"{mape_value(actual, pred):.6f}"},
+        {"metric": "candidate_backend", "value": payload["candidate_backend"]},
+        {"metric": "calibration_backend", "value": payload["calibration_backend"]},
     ]
     write_csv(cache_path(output_dir, "phase1_candidate_predictions_meta.csv"), meta)
     return path
@@ -209,4 +311,3 @@ def ensure_phase1_candidate_cache(data_dir: Path, output_dir: Path, force: bool 
 
 def load_candidate_rows(path: Path) -> list[dict[str, str]]:
     return read_csv(path)
-

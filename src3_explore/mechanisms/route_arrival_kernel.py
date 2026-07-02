@@ -9,6 +9,7 @@ from kddcup2017_task2.data import make_target_rows, project_paths, target_volume
 
 from src3_explore.common.metrics import safe_corr
 from src3_explore.common.reporting import ExperimentCard, write_card, write_csv
+from src3_explore.common.svg import write_bar_svg
 from src3_explore.common.trajectory import INTERSECTIONS, read_trajectory_aggregate, route_count_at_lag
 from src3_explore.common.visibility import load_phase1_context
 
@@ -72,22 +73,33 @@ def run(data_dir: Path, output_dir: Path, force_cache: bool = False) -> Experime
     out_dir = output_dir / "mechanisms"
     detail_csv = out_dir / "route_arrival_kernel_rows.csv"
     summary_csv = out_dir / "route_arrival_kernel_summary.csv"
+    chart = out_dir / "route_arrival_kernel_top_corr.svg"
     write_csv(detail_csv, detail)
     write_csv(summary_csv, summary)
+    chart_rows = [
+        {
+            "label": f"{row['intersection']}->{row['tollgate_id']} {row['block']} lag={row['lag_minutes']}",
+            "corr": row["corr"],
+        }
+        for row in sorted(summary, key=lambda item: abs(float(item["corr"])), reverse=True)
+    ]
+    write_bar_svg(chart, chart_rows, "label", "corr", "Route arrival kernel strongest correlations", max_items=18)
     best = max(summary, key=lambda row: abs(float(row["corr"]))) if summary else {"corr": "0"}
     card = ExperimentCard(
         name="route_arrival_kernel",
-        hypothesis="Route trajectory counts should explain tollgate volume after an interpretable lead-lag kernel.",
+        hypothesis="上游 route/trajectory count 经过 travel-time lag 后，应能解释一部分 tollgate volume；这比继续调五节点 GNN 更接近真实机制。",
         data_visibility=(
-            "Mechanism analysis uses train1 trajectory and volume labels only. It does not tune or rerun the "
-            "five-node GNN; phase1 labels are not used."
+            "机制分析只使用 train1 trajectory 和 train1 volume 标签；不调参、不重跑五节点 GNN，也不使用 phase1 标签。"
         ),
-        prototype="Compute correlations between upstream intersection-to-tollgate counts at 20-120 minute lags and target volumes.",
+        prototype="对 intersection→tollgate route count 计算 20-120 分钟 lag，与目标 tollgate volume 做相关性表和最强相关图。",
         metrics={"rows": len(detail), "max_abs_corr": f"{abs(float(best['corr'])):.6f}"},
-        result=f"Wrote route kernel summary to {summary_csv}.",
-        insight="Large lag-specific correlations identify route mechanisms that are richer than the five-node tollgate graph.",
-        next_step="Only promote route features that remain visible from green windows and survive rolling-fold checks.",
-        artifacts=(str(detail_csv), str(summary_csv)),
+        result=(
+            f"最强 lead-lag raw correlation 的 abs(corr)={abs(float(best['corr'])):.6f}；"
+            f"route 信号存在，但强度不足以直接替代现有树模型路线。"
+        ),
+        insight="即使不提升分数，也能识别哪些上游 route、lag 和 tollgate 组合具有机制解释力，避免继续在弱五节点图上调参。",
+        next_step="保留为机制候选。只有当 lag 特征满足绿色窗口可见性并通过 train1 rolling 后，才考虑进入预测候选。",
+        artifacts=(str(detail_csv), str(summary_csv), str(chart)),
     )
     write_card(output_dir, card)
     return card
@@ -106,4 +118,3 @@ def main(argv: Sequence[str] | None = None) -> None:
 
 if __name__ == "__main__":
     main()
-

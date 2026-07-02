@@ -103,3 +103,38 @@ def interval_coverage(
         "median_width": float(np.median(upper_arr - lower_arr)) if len(inside) else 0.0,
     }
 
+
+def summarize_interval_rows(
+    rows: Iterable[Mapping[str, object]],
+    group_fields: Sequence[str],
+    actual_field: str = "actual",
+    prediction_field: str = "prediction",
+    lower_field: str = "lower",
+    upper_field: str = "upper",
+) -> list[dict[str, object]]:
+    grouped: dict[tuple[object, ...], list[Mapping[str, object]]] = defaultdict(list)
+    for row in rows:
+        grouped[tuple(row.get(field, "") for field in group_fields)].append(row)
+
+    output: list[dict[str, object]] = []
+    for key, items in sorted(grouped.items(), key=lambda item: tuple(str(part) for part in item[0])):
+        actual = np.asarray([float(item[actual_field]) for item in items], dtype=float)
+        pred = np.asarray([float(item[prediction_field]) for item in items], dtype=float)
+        lower = np.asarray([float(item[lower_field]) for item in items], dtype=float)
+        upper = np.asarray([float(item[upper_field]) for item in items], dtype=float)
+        inside = (actual >= lower) & (actual <= upper)
+        errors = pred - actual
+        summary: dict[str, object] = {field: value for field, value in zip(group_fields, key)}
+        summary.update(
+            {
+                "count": len(items),
+                "coverage": float(np.mean(inside)) if len(inside) else 0.0,
+                "mean_width": float(np.mean(upper - lower)) if len(items) else 0.0,
+                "median_width": float(np.median(upper - lower)) if len(items) else 0.0,
+                "mape": mape_value(actual, pred) if len(actual) else 0.0,
+                "signed_error_mean": float(errors.mean()) if len(errors) else 0.0,
+                "miss_count": int(np.sum(~inside)) if len(inside) else 0,
+            }
+        )
+        output.append(summary)
+    return output

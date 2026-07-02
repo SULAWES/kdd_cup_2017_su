@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import time
 from pathlib import Path
 from typing import Sequence
 
@@ -9,14 +10,15 @@ from scipy.optimize import nnls
 
 from kddcup2017_task2.data import OBS_TIMES, TargetRow, block_name, combine_date_time, target_volume
 
-from src3_explore.common.metrics import bucket_quantiles, mape_value
+from src3_explore.common.metrics import bucket_quantiles, mape_value, summarize_errors
 from src3_explore.common.reporting import ExperimentCard, write_card, write_csv
+from src3_explore.common.svg import write_bar_svg
 from src3_explore.common.visibility import VisibilityContext, load_phase1_context, load_train1_latest_fold_context
 
 
 TARGET_TIMES_BY_BLOCK = {
-    "morning": (("08:00", 8, 0), ("08:20", 8, 20), ("08:40", 8, 40), ("09:00", 9, 0), ("09:20", 9, 20), ("09:40", 9, 40)),
-    "evening": (("17:00", 17, 0), ("17:20", 17, 20), ("17:40", 17, 40), ("18:00", 18, 0), ("18:20", 18, 20), ("18:40", 18, 40)),
+    "morning": (time(8, 0), time(8, 20), time(8, 40), time(9, 0), time(9, 20), time(9, 40)),
+    "evening": (time(17, 0), time(17, 20), time(17, 40), time(18, 0), time(18, 20), time(18, 40)),
 }
 
 
@@ -52,8 +54,8 @@ def block_vectors(context: VisibilityContext, source_agg, label_agg, days: Seque
             for block, clocks in OBS_TIMES.items():
                 green = [float(source_agg.get((combine_date_time(day, clock), combo[0], combo[1]), 0)) for clock in clocks]
                 red = [
-                    float(label_agg.get((combine_date_time(day, __import__("datetime").time(hour, minute)), combo[0], combo[1]), 0))
-                    for _, hour, minute in TARGET_TIMES_BY_BLOCK[block]
+                    float(label_agg.get((combine_date_time(day, clock), combo[0], combo[1]), 0))
+                    for clock in TARGET_TIMES_BY_BLOCK[block]
                 ]
                 green_rows.append(green)
                 red_rows.append(red)
@@ -71,15 +73,22 @@ def evaluate_transfer(
     green, red, meta = block_vectors(context, source_agg, label_agg, days, context.combos)
     pred = transfer.predict(green)
     rows = []
+    green_sum = np.asarray(green, dtype=float).sum(axis=1)
+    green_buckets = bucket_quantiles(green_sum, labels=("weak", "normal", "strong"))
     for block_idx, info in enumerate(meta):
         for slot_idx in range(6):
+            actual = float(red[block_idx, slot_idx])
+            prediction = float(pred[block_idx, slot_idx])
             rows.append(
                 {
                     **info,
                     "red_slot": slot_idx,
-                    "actual": f"{red[block_idx, slot_idx]:.6f}",
-                    "prediction": f"{pred[block_idx, slot_idx]:.6f}",
-                    "green_sum": f"{float(np.sum(green[block_idx])):.6f}",
+                    "actual": f"{actual:.6f}",
+                    "prediction": f"{prediction:.6f}",
+                    "signed_error": f"{prediction - actual:.6f}",
+                    "abs_pct_error": f"{abs(prediction - actual) / max(abs(actual), 1.0):.6f}",
+                    "green_sum": f"{float(green_sum[block_idx]):.6f}",
+                    "green_strength_bucket": green_buckets[block_idx],
                 }
             )
     return rows, mape_value(red.ravel(), pred.ravel())
@@ -159,26 +168,62 @@ def run(data_dir: Path, output_dir: Path, force_cache: bool = False) -> Experime
     transfer_csv = out_dir / "green_red_transfer_matrix.csv"
     train_csv = out_dir / "green_red_transfer_train1_fold.csv"
     phase1_csv = out_dir / "green_red_transfer_phase1_observation.csv"
+    train_group_csv = out_dir / "green_red_transfer_train1_fold_grouped.csv"
+    phase1_group_csv = out_dir / "green_red_transfer_phase1_grouped.csv"
     cluster_csv = out_dir / "green_shape_clusters.csv"
     ratio_csv = out_dir / "green_red_ratio_surface.csv"
+    chart = out_dir / "green_red_transfer_phase1_grouped_mape.svg"
+    train_grouped = []
+    phase1_grouped = []
+    for fields in (["block"], ["red_slot"], ["green_strength_bucket"], ["combo", "block"]):
+        for item in summarize_errors(train_rows, fields):
+            item["dimension"] = "/".join(fields)
+            item["value"] = "/".join(str(item.pop(field)) for field in fields)
+            train_grouped.append(item)
+        for item in summarize_errors(phase1_rows, fields):
+            item["dimension"] = "/".join(fields)
+            item["value"] = "/".join(str(item.pop(field)) for field in fields)
+            phase1_grouped.append(item)
     write_csv(transfer_csv, transfer_rows)
     write_csv(train_csv, train_rows)
     write_csv(phase1_csv, phase1_rows)
+    write_csv(train_group_csv, train_grouped)
+    write_csv(phase1_group_csv, phase1_grouped)
     write_csv(cluster_csv, cluster_rows)
     write_csv(ratio_csv, ratio_rows)
+    chart_rows = [
+        {"label": f"{row['dimension']}={row['value']}", "mape": row["mape"]}
+        for row in sorted(phase1_grouped, key=lambda item: float(item["mape"]), reverse=True)
+    ]
+    write_bar_svg(chart, chart_rows, "label", "mape", "Green-red transfer phase1 MAPE by group", max_items=18)
     card = ExperimentCard(
         name="green_red_transfer_analysis",
-        hypothesis="The six green slots carry a constrained shape signal for the six red slots.",
+        hypothesis="同一天 6 个绿色观察 slot 到 6 个红色目标 slot 之间存在可解释的形状迁移，但这种迁移应受到非负和低复杂度约束。",
         data_visibility=(
-            "Transfer defaults are selected on train1 only. Phase1 labels are used once to observe the fixed "
-            "transfer prototype, not to choose matrix rank, clusters, or smoothing."
+            "transfer 矩阵、shape cluster 和 ratio surface 只用 train1 拟合或选择；phase1 标签只用于观察固定原型表现，不参与矩阵秩、聚类数或平滑参数选择。"
         ),
-        prototype="Fit nonnegative 6x6 green-to-red transfer, cluster green shapes, and tabulate red/green ratios.",
-        metrics={"train1_latest_fold_mape": f"{train_mape:.6f}", "phase1_observation_mape": f"{phase1_mape:.6f}"},
-        result=f"Wrote transfer matrix and ratio surfaces under {out_dir}.",
-        insight="If this simple constrained matrix fails only in specific clusters, those clusters are regime candidates.",
-        next_step="Compare transfer residuals with residual_atlas high-error groups before adding nonlinear correction.",
-        artifacts=(str(transfer_csv), str(train_csv), str(phase1_csv), str(cluster_csv), str(ratio_csv)),
+        prototype="拟合非负 6x6 green-to-red transfer matrix，聚类 green shape，并输出 red/green ratio surface 和分组误差。",
+        metrics={
+            "train1_latest_fold_mape": f"{train_mape:.6f}",
+            "phase1_observation_mape": f"{phase1_mape:.6f}",
+            "worst_phase1_group": chart_rows[0]["label"] if chart_rows else "none",
+        },
+        result=(
+            f"单纯 6x6 线性迁移较弱，train1 fold MAPE={train_mape:.6f}，phase1 MAPE={phase1_mape:.6f}；"
+            f"最差 phase1 分组为 {chart_rows[0]['label'] if chart_rows else 'none'}。"
+        ),
+        insight="分数不好仍有价值：它说明 green shape 的线性可迁移部分有限，并能暴露哪些 slot/combo 需要非线性或 regime 条件。",
+        next_step="归档为诊断基线。只在 residual_atlas 高误差组与特定 green shape cluster 重合时，再考虑扩展非线性 transfer。",
+        artifacts=(
+            str(transfer_csv),
+            str(train_csv),
+            str(phase1_csv),
+            str(train_group_csv),
+            str(phase1_group_csv),
+            str(cluster_csv),
+            str(ratio_csv),
+            str(chart),
+        ),
     )
     write_card(output_dir, card)
     return card
@@ -197,4 +242,3 @@ def main(argv: Sequence[str] | None = None) -> None:
 
 if __name__ == "__main__":
     main()
-

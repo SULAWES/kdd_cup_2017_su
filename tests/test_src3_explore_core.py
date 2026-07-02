@@ -11,8 +11,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
 
+from kddcup2017_task2.data import TargetRow
 from src3_explore.common.metrics import summarize_errors
 from src3_explore.common.reporting import ExperimentCard
+from src3_explore.common.candidate_cache import calibration_actual_values
 from src3_explore.common.visibility import build_known_for_eval_days
 from src3_explore.diagnostics.green_red_transfer_analysis import fit_nonnegative_transfer_matrix
 from src3_explore.diagnostics.model_disagreement import nearest_model_by_actual
@@ -49,9 +51,10 @@ class Src3ExploreCoreTests(unittest.TestCase):
 
         for section in (
             "## demo",
-            "**Hypothesis.** h",
-            "**Data visibility.** visible",
-            "**Next step.** next",
+            "**假设（Hypothesis）:** h",
+            "**数据可见性（Data visibility）:** visible",
+            "**预期洞察（Expected insight）:** insight",
+            "**下一步（Next）:** next",
         ):
             self.assertIn(section, markdown)
 
@@ -95,6 +98,15 @@ class Src3ExploreCoreTests(unittest.TestCase):
         )
 
         self.assertEqual(winners, ["c", "b"])
+
+    def test_calibration_actual_values_use_training_labels(self) -> None:
+        day = date(2016, 10, 1)
+        row = TargetRow("1", "0", datetime.combine(day, time(8, 0)))
+        train_agg = {(row.start, row.tollgate_id, row.direction): 17}
+
+        actual = calibration_actual_values(train_agg, [row])
+
+        self.assertEqual(actual.tolist(), [17.0])
 
 
 if __name__ == "__main__":

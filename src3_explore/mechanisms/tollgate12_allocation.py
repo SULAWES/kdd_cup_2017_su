@@ -9,6 +9,7 @@ from kddcup2017_task2.data import TARGET_TIMES, combine_date_time
 
 from src3_explore.common.metrics import robust_z_scores
 from src3_explore.common.reporting import ExperimentCard, write_card, write_csv
+from src3_explore.common.svg import write_bar_svg
 from src3_explore.common.visibility import load_phase1_context
 
 
@@ -47,6 +48,17 @@ def add_anomaly_scores(rows: list[dict[str, object]]) -> list[dict[str, object]]
     return out
 
 
+def anomaly_count_rows(rows: Sequence[dict[str, object]]) -> list[dict[str, object]]:
+    groups: dict[tuple[str, str], int] = {}
+    for row in rows:
+        key = (str(row["block"]), str(row["slot"]))
+        groups[key] = groups.get(key, 0) + int(bool(row["allocation_anomaly"]))
+    return [
+        {"block": block, "slot": slot, "allocation_anomalies": count}
+        for (block, slot), count in sorted(groups.items())
+    ]
+
+
 def run(data_dir: Path, output_dir: Path, force_cache: bool = False) -> ExperimentCard:
     context = load_phase1_context(data_dir)
     train_rows = add_anomaly_scores(allocation_rows(context.train_agg, context.train_days))
@@ -54,22 +66,37 @@ def run(data_dir: Path, output_dir: Path, force_cache: bool = False) -> Experime
     out_dir = output_dir / "mechanisms"
     train_csv = out_dir / "tollgate12_allocation_train1.csv"
     phase1_csv = out_dir / "tollgate12_allocation_phase1_observation.csv"
+    anomaly_csv = out_dir / "tollgate12_allocation_train1_anomaly_counts.csv"
+    chart = out_dir / "tollgate12_allocation_train1_anomaly_counts.svg"
     write_csv(train_csv, train_rows)
     write_csv(phase1_csv, phase1_rows)
+    anomaly_rows = anomaly_count_rows(train_rows)
+    write_csv(anomaly_csv, anomaly_rows)
+    write_bar_svg(
+        chart,
+        [{"label": f"{row['block']} {row['slot']}", "count": row["allocation_anomalies"]} for row in anomaly_rows],
+        "label",
+        "count",
+        "Tollgate 1/2 allocation anomaly counts",
+    )
     anomaly_count = sum(1 for row in train_rows if row["allocation_anomaly"])
+    phase1_anomaly_count = sum(1 for row in phase1_rows if row["allocation_anomaly"])
     card = ExperimentCard(
         name="tollgate12_allocation",
-        hypothesis="Total entry demand for tollgate 1+2 and the y2 share may expose allocation or metering anomalies.",
+        hypothesis="tollgate 1 和 tollgate 2 entry 的总量 z12 可能稳定，但分配比例 r2 可能出现计量偏差或 allocation anomaly，导致独立预测失效。",
         data_visibility=(
-            "Uses train1 labels for mechanism fitting and reports phase1 allocation only as final observation; "
-            "no phase1 labels are used to tune thresholds."
+            "使用 train1 标签建立 robust r2 分布和阈值；phase1 allocation 只作为最终观察输出，不用来调阈值。"
         ),
-        prototype="Compute z12=y1+y2 and r2=y2/(y1+y2), then flag robust r2 deviations within slot/block.",
-        metrics={"train1_rows": len(train_rows), "train1_allocation_anomalies": anomaly_count},
-        result=f"Wrote allocation tables to {train_csv} and {phase1_csv}.",
-        insight="Allocation anomalies are plausible failure modes for models that predict tollgates independently.",
-        next_step="Compare phase1 high residuals on 1_0/2_0 with r2 anomaly flags before adding reconciliation.",
-        artifacts=(str(train_csv), str(phase1_csv)),
+        prototype="按 slot/block 计算 z12=y1+y2 与 r2=y2/(y1+y2)，用 robust z-score 标记分配异常，并输出 slot 级异常计数。",
+        metrics={
+            "train1_rows": len(train_rows),
+            "train1_allocation_anomalies": anomaly_count,
+            "phase1_observation_allocation_anomalies": phase1_anomaly_count,
+        },
+        result=f"train1 中标记到 {anomaly_count} 个 broad allocation flags，phase1 最终观察中有 {phase1_anomaly_count} 个；该信号更像 residual 解释器，而不是直接纠偏规则。",
+        insight="即使异常阈值较宽，也能检查 1_0/2_0 的高残差是否来自总量变化还是 tollgate 间分配变化。",
+        next_step="保留并扩展。下一步把 residual_atlas 中 1_0/2_0 高误差行与 r2 anomaly join，确认是否值得做 z12/r2 reconciliation。",
+        artifacts=(str(train_csv), str(phase1_csv), str(anomaly_csv), str(chart)),
     )
     write_card(output_dir, card)
     return card
@@ -88,4 +115,3 @@ def main(argv: Sequence[str] | None = None) -> None:
 
 if __name__ == "__main__":
     main()
-

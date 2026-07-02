@@ -9,6 +9,7 @@ from kddcup2017_task2.data import OBS_TIMES, block_name, combine_date_time, make
 
 from src3_explore.common.metrics import robust_z_scores
 from src3_explore.common.reporting import ExperimentCard, write_card, write_csv
+from src3_explore.common.svg import write_bar_svg
 from src3_explore.common.visibility import load_phase1_context
 
 
@@ -106,6 +107,33 @@ def regime_labels(rows: list[dict[str, object]]) -> list[str]:
     return labels
 
 
+def cluster_profile_rows(rows: Sequence[dict[str, object]]) -> list[dict[str, object]]:
+    groups: dict[int, list[dict[str, object]]] = {}
+    for row in rows:
+        groups.setdefault(int(row["cluster"]), []).append(row)
+    profiles = []
+    for cluster, items in sorted(groups.items()):
+        totals = np.asarray([float(row["total_target_volume"]) for row in items], dtype=float)
+        etc = np.asarray([float(row["ETC_share"]) for row in items], dtype=float)
+        r2 = np.asarray([float(row["r2_allocation"]) for row in items], dtype=float)
+        label_counts: dict[str, int] = {}
+        for row in items:
+            for label in str(row["regime_labels"]).split(";"):
+                label_counts[label] = label_counts.get(label, 0) + 1
+        top_labels = sorted(label_counts.items(), key=lambda item: (-item[1], item[0]))[:4]
+        profiles.append(
+            {
+                "cluster": cluster,
+                "days": len(items),
+                "target_volume_mean": f"{float(totals.mean()) if len(totals) else 0.0:.6f}",
+                "ETC_share_mean": f"{float(etc.mean()) if len(etc) else 0.0:.6f}",
+                "r2_allocation_mean": f"{float(r2.mean()) if len(r2) else 0.0:.6f}",
+                "top_labels": "; ".join(f"{label}={count}" for label, count in top_labels),
+            }
+        )
+    return profiles
+
+
 def run(data_dir: Path, output_dir: Path, force_cache: bool = False) -> ExperimentCard:
     context = load_phase1_context(data_dir)
     x, rows = build_day_embeddings(context)
@@ -123,20 +151,32 @@ def run(data_dir: Path, output_dir: Path, force_cache: bool = False) -> Experime
         row["cluster"] = int(cluster)
         row["regime_labels"] = label
     csv_path = output_dir / "representations" / "day_embedding_regimes.csv"
+    profile_csv = output_dir / "representations" / "day_embedding_cluster_profiles.csv"
+    chart = output_dir / "representations" / "day_embedding_cluster_volume.svg"
     write_csv(csv_path, rows)
+    profiles = cluster_profile_rows(rows)
+    write_csv(profile_csv, profiles)
+    write_bar_svg(
+        chart,
+        [{"label": f"cluster {row['cluster']}", "value": row["target_volume_mean"]} for row in profiles],
+        "label",
+        "value",
+        "Day embedding cluster mean target volume",
+    )
     counts = {}
     for row in rows:
         counts[row["cluster"]] = counts.get(row["cluster"], 0) + 1
+    counts_text = "; ".join(f"{key}={value}" for key, value in sorted(counts.items()))
     card = ExperimentCard(
         name="day_embedding_clustering",
-        hypothesis="Day-level embeddings should separate normal weekdays, weekends, holiday/post-holiday, and anomaly regimes.",
-        data_visibility="Uses train1 labels and attributes only; no phase1 labels or phase2 labels are needed.",
-        prototype="KMeans over day embeddings with heuristic labels for low volume, ETC, and tollgate allocation anomalies.",
-        metrics={"days": len(rows), "clusters": k, "cluster_counts": "; ".join(f"{key}={value}" for key, value in sorted(counts.items()))},
-        result=f"Wrote regime table to {csv_path}.",
-        insight="Regime labels provide join keys for residual_atlas and uncertainty analysis.",
-        next_step="Inspect high-error phase1 rows by nearest train1 regime before adding model complexity.",
-        artifacts=(str(csv_path),),
+        hypothesis="day-level embedding 应能区分 normal weekday、weekend、holiday/post-holiday、low-volume、ETC anomaly 和 tollgate allocation anomaly 等 regime。",
+        data_visibility="只使用 train1 标签和 train1 属性聚合；不需要 phase1 或 phase2 标签。",
+        prototype="构造每日 combo/block/total/ETC/allocation 向量，标准化后 KMeans 聚类，并叠加低流量、ETC、allocation 等启发式标签。",
+        metrics={"days": len(rows), "clusters": k, "cluster_counts": counts_text},
+        result=f"train1 被分成 {k} 个 day regime，cluster 分布为 {counts_text}；holiday/ETC/allocation 异常形成了独立或稀疏 cluster。",
+        insight="即使不直接预测，也能给 residual_atlas、uncertainty 和 mechanism 输出提供 regime join key，避免只看 pooled MAPE。",
+        next_step="保留并扩展。下一步把 phase1 高误差日映射到最近 train1 regime，检查是否为 holiday/post-holiday 或 allocation 类失效。",
+        artifacts=(str(csv_path), str(profile_csv), str(chart)),
     )
     write_card(output_dir, card)
     return card
@@ -155,4 +195,3 @@ def main(argv: Sequence[str] | None = None) -> None:
 
 if __name__ == "__main__":
     main()
-

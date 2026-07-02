@@ -10,6 +10,7 @@ from kddcup2017_task2.features import FeatureBuilder, Vectorizer
 from kddcup2017_task2.pipeline import DEFAULT_DROP_FEATURES, filter_features
 
 from src3_explore.common.reporting import ExperimentCard, write_card, write_csv
+from src3_explore.common.svg import write_bar_svg
 from src3_explore.common.visibility import load_phase1_context, load_phase2_visible_rows
 
 
@@ -37,6 +38,46 @@ def domain_auc(left_features, right_features) -> float:
     return float(roc_auc_score(y, prob))
 
 
+def domain_diagnostics(comparison: str, left_features, right_features) -> tuple[dict[str, object], list[dict[str, object]]]:
+    from sklearn.ensemble import RandomForestClassifier
+    from sklearn.metrics import roc_auc_score
+    from sklearn.model_selection import StratifiedKFold, cross_val_predict
+
+    vectorizer = Vectorizer()
+    x = vectorizer.fit_transform(left_features + right_features)
+    y = np.asarray([0] * len(left_features) + [1] * len(right_features), dtype=int)
+    folds = min(5, int(np.bincount(y).min()))
+    if folds < 2:
+        auc = 0.5
+    else:
+        clf = RandomForestClassifier(n_estimators=150, max_depth=5, min_samples_leaf=8, random_state=13, n_jobs=-1)
+        cv = StratifiedKFold(n_splits=folds, shuffle=True, random_state=13)
+        prob = cross_val_predict(clf, x, y, cv=cv, method="predict_proba")[:, 1]
+        auc = float(roc_auc_score(y, prob))
+    fitted = RandomForestClassifier(n_estimators=150, max_depth=5, min_samples_leaf=8, random_state=13, n_jobs=-1)
+    fitted.fit(x, y)
+    importances = [
+        {
+            "comparison": comparison,
+            "feature": name,
+            "importance": f"{float(value):.8f}",
+        }
+        for name, value in zip(vectorizer.names, fitted.feature_importances_)
+        if float(value) > 0.0
+    ]
+    importances.sort(key=lambda row: float(row["importance"]), reverse=True)
+    return (
+        {
+            "comparison": comparison,
+            "auc": f"{auc:.6f}",
+            "left_rows": len(left_features),
+            "right_rows": len(right_features),
+            "top_feature": importances[0]["feature"] if importances else "",
+        },
+        importances[:30],
+    )
+
+
 def run(data_dir: Path, output_dir: Path, force_cache: bool = False) -> ExperimentCard:
     phase1 = load_phase1_context(data_dir)
     phase2 = load_phase2_visible_rows(data_dir)
@@ -50,42 +91,36 @@ def run(data_dir: Path, output_dir: Path, force_cache: bool = False) -> Experime
     train_features = feature_matrix(phase1, phase1_train_rows)
     early_features = feature_matrix(phase1, early_rows)
     late_features = feature_matrix(phase1, late_rows)
-    rows = [
-        {
-            "comparison": "train1_early_vs_train1_late",
-            "auc": f"{domain_auc(early_features, late_features):.6f}",
-            "left_rows": len(early_features),
-            "right_rows": len(late_features),
-        },
-        {
-            "comparison": "train1_targets_vs_phase1_visible",
-            "auc": f"{domain_auc(train_features, phase1_features):.6f}",
-            "left_rows": len(train_features),
-            "right_rows": len(phase1_features),
-        },
-        {
-            "comparison": "phase1_visible_vs_phase2_visible",
-            "auc": f"{domain_auc(phase1_features, phase2_features):.6f}",
-            "left_rows": len(phase1_features),
-            "right_rows": len(phase2_features),
-        },
-    ]
+    comparisons = (
+        ("train1_early_vs_train1_late", early_features, late_features),
+        ("train1_targets_vs_phase1_visible", train_features, phase1_features),
+        ("phase1_visible_vs_phase2_visible", phase1_features, phase2_features),
+    )
+    rows = []
+    importance_rows = []
+    for comparison, left, right in comparisons:
+        row, importances = domain_diagnostics(comparison, left, right)
+        rows.append(row)
+        importance_rows.extend(importances)
     csv_path = output_dir / "diagnostics" / "adversarial_validation.csv"
+    importances_csv = output_dir / "diagnostics" / "adversarial_validation_feature_importance.csv"
+    chart = output_dir / "diagnostics" / "adversarial_validation_auc.svg"
     write_csv(csv_path, rows)
+    write_csv(importances_csv, importance_rows)
+    write_bar_svg(chart, rows, "comparison", "auc", "Adversarial validation AUC")
     max_auc = max(float(row["auc"]) for row in rows)
     card = ExperimentCard(
         name="adversarial_validation",
-        hypothesis="Domain classifiers should detect whether phase1/phase2 visible rows differ from train1.",
+        hypothesis="如果 train1、phase1 可见输入、phase2 可见输入之间存在分布偏移，域分类器应能把这些时期区分开。",
         data_visibility=(
-            "Uses only feature rows generated through visibility contexts. No target labels are required for domain "
-            "classification, and phase2 red labels are unavailable."
+            "只使用 visibility context 生成的特征行；域分类不需要目标标签，也不会读取 phase2 红窗标签。"
         ),
-        prototype="RandomForest domain classifier with cross-validated AUC for train/phase splits.",
+        prototype="用 RandomForest 做 train/phase split 域分类，交叉验证输出 AUC，并保存特征重要性。",
         metrics={"max_auc": f"{max_auc:.6f}", "comparisons": len(rows)},
-        result=f"Wrote adversarial validation summary to {csv_path}.",
-        insight="AUC far above 0.5 means validation error should be read by regime, not only as a pooled MAPE.",
-        next_step="Join high-AUC feature importances with day/regime clustering to identify the shifted dimensions.",
-        artifacts=(str(csv_path),),
+        result=f"最大域分类 AUC={max_auc:.6f}，说明时期之间高度可分；当前 top feature 主要受绝对日期影响，不能直接解释为因果 traffic shift。",
+        insight="即使不用于建模，也能提醒 pooled MAPE 会掩盖时期偏移；特征重要性可定位偏移来自日期、绿窗强度、车辆结构还是历史统计。",
+        next_step="扩展。下一版应增加去除 day_of_month 的 adversarial validation，以隔离真实输入分布偏移。",
+        artifacts=(str(csv_path), str(importances_csv), str(chart)),
     )
     write_card(output_dir, card)
     return card
@@ -104,4 +139,3 @@ def main(argv: Sequence[str] | None = None) -> None:
 
 if __name__ == "__main__":
     main()
-

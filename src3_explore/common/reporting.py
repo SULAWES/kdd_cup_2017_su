@@ -19,28 +19,28 @@ class ExperimentCard:
     artifacts: Sequence[str] = field(default_factory=tuple)
 
     def to_markdown(self) -> str:
-        metric_lines = "\n".join(f"- `{key}`: {value}" for key, value in self.metrics.items()) or "- none"
-        artifact_lines = "\n".join(f"- `{item}`" for item in self.artifacts) or "- none"
+        metric_lines = "\n".join(f"- `{key}`: {value}" for key, value in self.metrics.items()) or "- 无"
+        artifact_lines = "\n".join(f"- `{item}`" for item in self.artifacts) or "- 无"
         return "\n".join(
             [
                 f"## {self.name}",
                 "",
-                f"**Hypothesis.** {self.hypothesis}",
+                f"**假设（Hypothesis）:** {self.hypothesis}",
                 "",
-                f"**Data visibility.** {self.data_visibility}",
+                f"**数据可见性（Data visibility）:** {self.data_visibility}",
                 "",
-                f"**Prototype.** {self.prototype}",
+                f"**最小实现（Prototype）:** {self.prototype}",
                 "",
-                "**Metrics.**",
+                f"**预期洞察（Expected insight）:** {self.insight}",
+                "",
+                "**指标（Metrics）:**",
                 metric_lines,
                 "",
-                f"**Result.** {self.result}",
+                f"**结果（Result）:** {self.result}",
                 "",
-                f"**Insight.** {self.insight}",
+                f"**下一步（Next）:** {self.next_step}",
                 "",
-                f"**Next step.** {self.next_step}",
-                "",
-                "**Artifacts.**",
+                "**产物（Artifacts）:**",
                 artifact_lines,
                 "",
             ]
@@ -90,4 +90,3 @@ def write_csv(path: Path, rows: Sequence[Mapping[str, object]], fieldnames: Sequ
 def read_csv(path: Path) -> list[dict[str, str]]:
     with path.open(newline="", encoding="utf-8") as f:
         return list(csv.DictReader(f))
-
