@@ -18,6 +18,7 @@ from src3_explore.common.candidate_cache import calibration_actual_values
 from src3_explore.common.visibility import build_known_for_eval_days
 from src3_explore.diagnostics.green_red_transfer_analysis import fit_nonnegative_transfer_matrix
 from src3_explore.diagnostics.model_disagreement import nearest_model_by_actual
+from src3_explore.explain.common import ExplanationCard
 
 
 class Src3ExploreCoreTests(unittest.TestCase):
@@ -55,6 +56,31 @@ class Src3ExploreCoreTests(unittest.TestCase):
             "**数据可见性（Data visibility）:** visible",
             "**预期洞察（Expected insight）:** insight",
             "**下一步（Next）:** next",
+        ):
+            self.assertIn(section, markdown)
+
+    def test_explanation_card_markdown_contains_required_sections(self) -> None:
+        card = ExplanationCard(
+            name="explain_demo",
+            hypothesis="h",
+            method="m",
+            expected_falsification="f",
+            metrics={"mape": "0.1"},
+            key_result="r",
+            interpretation="i",
+            next_step="n",
+        )
+
+        markdown = card.to_markdown()
+
+        for section in (
+            "## explain_demo",
+            "**假设（Hypothesis）:** h",
+            "**方法（Method）:** m",
+            "**可证伪预期（Expected falsification）:** f",
+            "**关键结果（Key result）:** r",
+            "**解释（Interpretation）:** i",
+            "**下一步（Next step）:** n",
         ):
             self.assertIn(section, markdown)
 

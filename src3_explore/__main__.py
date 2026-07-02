@@ -16,6 +16,16 @@ EXPERIMENTS = {
     "quantile_baselines": "src3_explore.probabilistic.quantile_baselines",
     "conformal_intervals": "src3_explore.probabilistic.conformal_intervals",
     "adversarial_validation": "src3_explore.diagnostics.adversarial_validation",
+    "explain_graph_signal_audit": "src3_explore.explain.graph_signal_audit",
+    "explain_gnn_message_passing_damage": "src3_explore.explain.gnn_message_passing_damage",
+    "explain_graph_randomization_test": "src3_explore.explain.graph_randomization_test",
+    "explain_route_graph_replacement": "src3_explore.explain.route_graph_replacement",
+    "explain_sequence_permutation_test": "src3_explore.explain.sequence_permutation_test",
+    "explain_nn_representation_swap": "src3_explore.explain.nn_representation_swap",
+    "explain_nn_prediction_collapse": "src3_explore.explain.nn_prediction_collapse",
+    "explain_noise_robustness_test": "src3_explore.explain.noise_robustness_test",
+    "explain_information_decomposition": "src3_explore.explain.information_decomposition",
+    "explain_oracle_ensemble_gap": "src3_explore.explain.oracle_ensemble_gap",
 }
 
 
@@ -49,4 +59,3 @@ def main(argv=None) -> None:
 
 if __name__ == "__main__":
     main()
-

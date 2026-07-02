@@ -54,6 +54,16 @@
 | mechanisms | `etc_component_model.py` | 把 ETC、vehicle model、vehicle type 当作生成分量，比较 component-level green→red 关系。 |
 | probabilistic | `quantile_baselines.py` | 训练 p10/p50/p90 分位数基线，并评估 coverage 与 failure cases。 |
 | probabilistic | `conformal_intervals.py` | 用 train1 calibration residual 构造 conformal interval，并与 ensemble spread 对齐。 |
+| explain | `graph_signal_audit.py` | 审计五节点 raw/residual/log-residual 图信号是否稳定。 |
+| explain | `gnn_message_passing_damage.py` | 模拟五节点 message passing 对 ensemble anchor 的平滑伤害、over-smoothing 和低流量负迁移。 |
+| explain | `graph_randomization_test.py` | 多 seed 比较 topology、random、full、identity 边，验证真实边是否优于随机边。 |
+| explain | `route_graph_replacement.py` | 用 route/intersection/tollgate lead-lag 特征替代五节点静态图，比较 residual explanation。 |
+| explain | `sequence_permutation_test.py` | 比较正常顺序、打乱顺序、summary-only、raw-sequence tree/linear 和已记录 LSTM/Transformer 基线。 |
+| explain | `nn_representation_swap.py` | 比较 NN/tree × raw sequence/engineered features，区分模型族问题和表示问题。 |
+| explain | `nn_prediction_collapse.py` | 比较真实、ensemble 和 LSTM/Transformer collapse proxy 的分布、分位数和低/高流量 recall。 |
+| explain | `noise_robustness_test.py` | 比较标签 winsorize、holiday removed、低流量权重、log/raw target 对 ExtraTrees/XGB/MLP 及神经基线的影响。 |
+| explain | `information_decomposition.py` | 递增加入 combo/hour/slot、lag、rolling、green obs、attr、route、disagreement，量化信息源贡献。 |
+| explain | `oracle_ensemble_gap.py` | 计算 candidate oracle、ensemble regret，并诊断 oracle winner 是否可由上下文信号预测。 |
 
 ## Experiment card 模板
 
@@ -100,6 +110,25 @@ python -m src3_explore all --force-cache
 - Quantile baseline：p10-p90 phase1 coverage 为 `0.761905`，低于名义 80%；wide interval 覆盖好于 narrow interval，说明 uncertainty width 有信号但仍未充分校准。
 - Conformal interval：split conformal radius 为 `25.647037`，phase1 coverage `0.961905`，mean width `51.230316`。覆盖偏保守，pooled radius 缺少自适应。
 - Adversarial validation：AUC 很高（`0.984094` 到 `1.000000`），但 `day_of_month` 主导特征重要性。需要去除绝对日期特征后再解释为真实交通分布偏移。
+
+## Explanation experiments 运行摘要
+
+运行日期：2026-07-03。
+
+目标：解释为什么五节点 GNN、LSTM、Transformer 在本任务上弱于当前结构化 ensemble，而不是继续调参冲分。
+
+关键现象：
+
+- 图信号审计：log residual 平均绝对节点相关 `0.549115`，但稳定 residual 边只有 `4/10`，说明五节点图有局部相关但不够稳定。
+- Message passing damage：identity anchor MAPE `0.116640`，最佳非 identity message passing MAPE `0.129317`，最小节点距离比例 `0.405009`，支持 over-smoothing / negative transfer 解释。
+- 随机化检验：topology 平均 MAPE `0.182707`，random 平均 MAPE `0.164563`，真实五节点边没有优于随机边。
+- Route graph replacement：五节点静态邻居 residual MAPE `0.339606`，route arrival kernel residual MAPE `0.263472`；route 图更有语义，但仍更适合解释或受限融合。
+- Sequence permutation：raw-sequence ExtraTrees 正常顺序 MAPE `0.144971`，summary-only MAPE `0.161596`，而已记录 LSTM/Transformer 仍在 `0.19` 左右；序列顺序不是主要优势来源。
+- Representation swap：tree engineered MAPE `0.125141`，NN engineered MAPE `0.176640`，tree raw MAPE `0.144971`；问题不只是 raw sequence 表示，模型族和训练方差也重要。
+- Prediction collapse：真实 std `35.437279`，ensemble std `33.388182`，LSTM collapse proxy std `11.685864`；直接序列神经模型有分布塌缩风险。
+- Noise robustness：ExtraTrees raw MAPE `0.125077`，最佳扰动 MAPE `0.123205`，MLP raw MAPE `0.176640`；树模型对噪声和目标尺度更稳。
+- Information decomposition：只用 combo/hour/slot 的 MAPE `0.348402`，逐步加入结构信息后最佳阶段 MAPE `0.126216`；显式结构信息解释了 ensemble 优势。
+- Oracle ensemble gap：ensemble MAPE `0.116640`，candidate oracle MAPE `0.057646`，winner CV accuracy `0.369048`；候选多样性有上界，但 winner 预测仍难，必须用 train1-only 协议。
 
 ## 当前判断
 
