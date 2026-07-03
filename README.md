@@ -1,117 +1,280 @@
-# KDD Cup 2017 Task 2 Baseline
+# KDD Cup 2017 Task 2 Traffic Volume Forecasting
 
-目标：预测收费站/方向在指定 20 分钟窗口内的平均 traffic volume。
+本仓库实现 KDD Cup 2017 Task 2 的收费站流量预测流程：对指定收费站/方向组合，在每天早晚高峰的 20 分钟目标窗口内预测平均车流量。
 
-当前实现先保证端到端可运行，并把数据、特征、模型、流程拆开，方便后续替换更强模型。
+当前正式方案位于 `src/kddcup2017_task2/`，入口为 `run_task2.py`。正式默认路线是四模型融合，并按目标小时学习融合权重；该路线是当前仓库可复现的正式 SOTA。
 
-## 数据假设
+## 当前状态
 
-数据位于 `dataset/`，使用本仓库已有文件：
+| 路线 | 命令 | phase1 MAPE | 状态 |
+| --- | --- | ---: | --- |
+| ExtraTrees low-volume block 单模型 | `run_task2.py validate` | 约 `0.120175` | 当前最好单模型 |
+| 四模型 global 权重融合 | `run_task2.py validate-ensemble --weight-scope global` | 约 `0.118018` | 上一版正式基线 |
+| 四模型 hour 权重融合 | `run_task2.py validate-ensemble` | 约 `0.116167` | 当前正式 SOTA |
+| phase2 合法校准融合 | `run_task2.py predict-ensemble` | 校准约 `0.111638` | 仅用于 phase2 提交；不是 phase1 无泄露指标 |
 
-- `dataSets/training/volume(table 6)_training.csv`
-- `dataSet_phase2/volume(table 6)_training2.csv`
-- `dataSets/testing_phase1/volume(table 6)_test1.csv`
-- `dataSet_phase2/volume(table 6)_test2.csv`
-- `submission_sample_volume.csv`
-- 天气文件 `weather (table 7)_*.csv`
+四模型候选为：
 
-Task 2 的提交格式为 420 行：
+- `low_volume_block`
+- `xgb`
+- `mlp`
+- `ratio_lag_7`
 
-- 7 天
-- 每天 08:00-10:00 和 17:00-19:00，共 12 个 20 分钟窗口
-- 5 个收费站/方向组合：`1_0`, `1_1`, `2_0`, `3_0`, `3_1`
+默认融合粒度为 `--weight-scope hour`，即 `08`、`09`、`17`、`18` 四个目标小时分别学习非负凸组合权重。该选择由 train1 rolling 检查支持，不是直接用 phase1 标签挑出的后验最优配置。
 
-测试流量文件提供同日 06:00-08:00 和 15:00-17:00 的观测窗口，作为目标窗口预测特征。
+## 数据边界
 
-## 运行
+本项目按比赛发布阶段区分训练标签、预测时可见输入和最终评分标签。
 
-建议使用工作区本地虚拟环境：
+| 数据 | 日期 | 文件 | 用途 |
+| --- | --- | --- | --- |
+| train1 | 2016-09-19 至 2016-10-17 | `dataset/dataSets/training/volume(table 6)_training.csv` | phase1 训练标签与历史统计 |
+| test1 | 2016-10-18 至 2016-10-24 | `dataset/dataSets/testing_phase1/volume(table 6)_test1.csv` | phase1 同日绿色观察窗口输入 |
+| train2 | 2016-10-18 至 2016-10-24 | `dataset/dataSet_phase2/volume(table 6)_training2.csv` | phase1 最终评分标签；phase2 已发布训练标签 |
+| test2 | 2016-10-25 至 2016-10-31 | `dataset/dataSet_phase2/volume(table 6)_test2.csv` | phase2 同日绿色观察窗口输入 |
+| sample | 提交模板日期 | `dataset/submission_sample_volume.csv` | 输出行顺序和提交格式 |
 
-```sh
+预测目标为 5 个收费站/方向组合：
+
+```text
+1_0, 1_1, 2_0, 3_0, 3_1
+```
+
+每天预测 12 个目标窗口：
+
+```text
+08:00, 08:20, 08:40, 09:00, 09:20, 09:40
+17:00, 17:20, 17:40, 18:00, 18:20, 18:40
+```
+
+测试 volume 文件只提供同日绿色观察窗口：
+
+```text
+morning: 06:00-08:00
+evening: 15:00-17:00
+```
+
+目标红窗真实流量不能进入特征、训练、调参、校准或选择逻辑。phase1 验证中，train2 标签只能在预测固定后用于最终评分。
+
+## 环境
+
+推荐使用仓库本地虚拟环境：
+
+```bash
 python -m venv .venv
-.venv\Scripts\python -m pip install -r requirements.txt
+./.venv/Scripts/python.exe -m pip install -r requirements.txt
 ```
 
-默认模型使用 `scikit-learn` 的 `ExtraTreesRegressor`，目标值默认做 `log1p` 变换。代码仍保留无外部依赖的 `numpy` 岭回归 fallback。
+依赖见 `requirements.txt`，包括 `numpy`、`scikit-learn`、`scipy`、`xgboost`、`lightgbm`、`torch` 等。
 
-```sh
-.venv\Scripts\python run_task2.py validate
-.venv\Scripts\python run_task2.py predict
-.venv\Scripts\python run_task2.py validate-ensemble
-.venv\Scripts\python run_task2.py predict-ensemble
+## 正式运行命令
+
+无泄露 phase1 验证：
+
+```bash
+./.venv/Scripts/python.exe run_task2.py validate-ensemble
 ```
 
-可切换模型：
+生成 phase2 提交文件：
 
-```sh
-python run_task2.py --model ridge validate
-python run_task2.py --model lgbm validate
-python run_task2.py --model hgb validate
-python run_task2.py --model extra validate
-python run_task2.py --group global validate
-python run_task2.py --group block --target-transform raw validate
-python run_task2.py --use-weather validate
-python run_task2.py --sample-weight-power 0 validate
-python run_task2.py --history-blend 0.195 --prediction-scale 0.962 validate
-python run_task2.py --no-prune-features validate
+```bash
+./.venv/Scripts/python.exe run_task2.py predict-ensemble
 ```
 
-输出：
+复现上一版全局权重融合：
 
-- 验证预测：`outputs/validation_phase1_pred.csv`
-- phase2 提交：`outputs/submission_task2_volume.csv`
+```bash
+./.venv/Scripts/python.exe run_task2.py validate-ensemble --weight-scope global
+```
 
-当前 phase1 验证方式：
+运行当前最好单模型：
 
-- 训练：`2016-09-19` 至 `2016-10-17`
-- 验证：用 phase1 test 观测窗口预测 `2016-10-18` 至 `2016-10-24`
-- 默认 `extra + low_volume_block + log + 观测结构特征（保留观测窗口波动 obs_std）+ 无天气 + 轻量 MAPE 权重 + 剪枝噪声特征` 验证 MAPE：约 `0.120175`
-  - 本版在 ExtraTrees 默认超参 `random_state=13, max_depth=14, min_samples_leaf=10` 基础上，增加 recent-low-volume 结构切换：若某 combo 最近 7 天均值同时低于最近整体均值和自身全历史均值的 60%，则该 combo 使用 block 模型，其余使用 global 模型。phase1 和 phase2 训练数据下均只选择 `1_0`。
-  - 单纯 `--group global` 为约 `0.120773`；旧默认约 `0.122050`。
-- `--history-blend 0.09` 可在 phase1 验证上得到约 `0.119564`，但该权重来自 phase1 验证周调参；训练期滚动周没有支持把它作为默认配置。
-- 四模型融合命令：
-  - `validate-ensemble`：只用训练期最后一周校准融合权重，再评估 phase1，默认按目标小时分别学习权重，MAPE 约 `0.116167`，不使用 phase1 验证标签调权。上一版全局权重路线可用 `--weight-scope global` 复现，MAPE 约 `0.118018`。
-  - `predict-ensemble`：用已发布的 Oct.18-24 标签校准权重，再预测 Oct.25-31；默认按目标小时调权，校准 MAPE 约 `0.111638`，该数合法用于 phase2 权重估计，但不能当作无泄露 phase1 验证分数。
-- 递推使用前序目标窗预测、trajectory 绿窗统计、天气特征、分组建模和恢复已剪枝特征均已复测，当前默认下没有带来叠加收益。
-- 旧实验 `--history-blend 0.195 --prediction-scale 0.962 --sample-weight-power 0.22` 在旧模型上可得到约 `0.117796`，但这组参数来自该验证集调参，不能作为无泄露默认配置。
-- `extra + global + log + 观测结构特征 + 无天气 + 轻量 MAPE 权重 + 不剪枝` 验证 MAPE：约 `0.124342`
-- `extra + global + log + 观测结构特征 + 无天气 + 无权重` 验证 MAPE：约 `0.128240`
-- `extra + global + log + 观测结构特征 + 天气 + 轻量 MAPE 权重` 验证 MAPE：约 `0.125849`
-- `extra + block + raw` 验证 MAPE：约 `0.137534`
-- `lgbm + global + log` 验证 MAPE：约 `0.147154`
-- `ridge + global + raw` 验证 MAPE：约 `0.196292`
+```bash
+./.venv/Scripts/python.exe run_task2.py validate
+```
 
-最新 `src1/` 探索仍未晋升到正式 `src/`，但已整理出两条值得继续推进的候选：
+生成单模型 phase2 提交：
 
-- trajectory 作为第五融合候选，phase1 最好约 `0.115924`，rolling 支持不够稳定。
-- 同日绿色观察窗强弱后验校正，phase1 直选最好约 `0.114456`，rolling 支持配置约 `0.11583`。
-- 神经先验门控融合，phase1 最好约 `0.114758`，但 seed 敏感且尚未做 train1 rolling 选择协议。
-- 五节点 PyTorch GNN，phase1 最好约 `0.133801`。它明显弱于当前主路线，但作为直接图神经网络路线显著好于早期 numpy GCN 和多数直接神经预测，适合作为“为什么不选 GNN 主线”的重点对照。
+```bash
+./.venv/Scripts/python.exe run_task2.py predict
+```
 
-最新 `src2/` 是第二个隔离探索区，用于更发散的直接序列神经网络尝试：
+常用单模型对照：
 
-- LSTM 直接序列预测，当前最好初始 CPU phase1 探索分数约 `0.193614`。
-- Transformer 直接序列预测，当前最好初始 CPU phase1 探索分数约 `0.191686`。
-- 两者只作为可运行对照基线，明显弱于正式树模型/融合路线，不晋升到 `src/`。
+```bash
+./.venv/Scripts/python.exe run_task2.py --model ridge validate
+./.venv/Scripts/python.exe run_task2.py --model lgbm validate
+./.venv/Scripts/python.exe run_task2.py --model hgb validate
+./.venv/Scripts/python.exe run_task2.py --model extra --group global validate
+./.venv/Scripts/python.exe run_task2.py --group block --target-transform raw validate
+./.venv/Scripts/python.exe run_task2.py --use-weather validate
+./.venv/Scripts/python.exe run_task2.py --no-prune-features validate
+```
 
-路线归档见 `docs/route_exploration_candidates.md`，`src1` 完整实验日志见 `docs/experiments/src1_exploration_log.md`，`src2` 实验日志见 `docs/experiments/src2_exploration_log.md`。
+主要输出：
 
-提交文件按 `submission_sample_volume.csv` 的行顺序生成，只把样例日期平移到 phase2 预测日期，避免位置式评分或检查脚本错配 key。
+| 命令 | 输出 |
+| --- | --- |
+| `validate` | `outputs/validation_phase1_pred.csv` |
+| `predict` | `outputs/submission_task2_volume.csv` |
+| `validate-ensemble` | `outputs/validation_phase1_ensemble_pred.csv` |
+| `predict-ensemble` | `outputs/submission_task2_volume_ensemble.csv` |
 
-## 架构
+`outputs/` 为实验产物目录，默认不纳入提交。
 
-- `src/kddcup2017_task2/data.py`：CSV 读取、20 分钟聚合、目标窗口、提交文件生成
-- `src/kddcup2017_task2/features.py`：日历、可选天气、观测窗口、车型/ETC 结构、历史统计特征
-- `src/kddcup2017_task2/model.py`：模型工厂、岭回归 fallback、树模型和 MAPE
-- `src/kddcup2017_task2/pipeline.py`：`validate` / `predict` 流程
+## 探索区
 
-## 后续提升方向
+探索代码与正式路线隔离。除非明确晋升，不应把探索配置迁入 `src/`。
 
-优先级建议：
+### src1：传统探索与候选方案
 
-1. 做按 combo 和 target slot 的独立模型，减少不同收费站方向之间的分布干扰。
-2. 增加节假日、调休日、工作日类型，以及国庆后恢复期的特殊标记。
-3. 使用递推预测：对 08:20 之后、17:20 之后的窗口引入前一目标窗口的预测值。
-4. 做更稳健的滚动交叉验证；`history_blend` 和 `prediction_scale` 必须只用训练折拟合，避免把 phase1 验证标签信息固化到默认参数。
-5. 增加模型融合：历史规则模型、岭回归、树模型分别产出结果后加权。
-6. 如果安装 `pandas`，可以增加更方便的离线分析脚本，但核心训练流程不依赖它。
+`src1/kddcup2017_task2_exp/` 保存尚未晋升到正式路线的实验。
+
+常用入口：
+
+```bash
+./.venv/Scripts/python.exe run_task2_exp.py --help
+./.venv/Scripts/python.exe run_task2_graph_exp.py --help
+./.venv/Scripts/python.exe run_task2_torch_graph_exp.py --help
+./.venv/Scripts/python.exe run_task2_torch_meta_exp.py --help
+./.venv/Scripts/python.exe run_task2_torch_nn_exp.py --help
+./.venv/Scripts/python.exe run_task2_traj_exp.py --help
+./.venv/Scripts/python.exe run_task2_traj_ensemble_exp.py --help
+./.venv/Scripts/python.exe run_task2_traj_rolling_exp.py --help
+./.venv/Scripts/python.exe run_task2_obs_adjust_exp.py --help
+./.venv/Scripts/python.exe run_task2_obs_adjust_rolling_exp.py --help
+```
+
+关键探索结论：
+
+| 方向 | 最好观察结果 | 当前判断 |
+| --- | ---: | --- |
+| trajectory 第五候选，block cap `0.15` | 约 `0.115924` | 有增量信号，rolling 支持不够稳定 |
+| 观察窗后验校正，phase1 直选最佳 | 约 `0.114456` | exploratory 上界，不能作为正式 SOTA |
+| 观察窗后验校正，rolling 支持配置 | 约 `0.11583` | 最值得继续 formalize |
+| 神经先验门控融合 | 约 `0.114758` | seed 敏感，尚无 rolling 选择协议 |
+| PyTorch 五节点 GNN | 约 `0.133801` | 重要对照路线，不作为主线 |
+
+### src2：直接序列神经网络对照
+
+`src2/` 保存 LSTM / Transformer 直接序列预测探索。
+
+运行示例：
+
+```bash
+./.venv/Scripts/python.exe run_task2_src2_nn_exp.py --device cpu --methods lstm transformer --hidden 16 --epochs 30 --patience 30 --output outputs/experiments/src2_sequence_nn_smoke.csv
+```
+
+当前最好初始 CPU 探索结果：
+
+| 模型 | phase1 MAPE | 判断 |
+| --- | ---: | --- |
+| Transformer | 约 `0.191686` | 可运行对照，明显弱于树模型融合 |
+| LSTM | 约 `0.193614` | 可运行对照，明显弱于树模型融合 |
+
+### src3_explore：结构诊断与失效模式分析
+
+`src3_explore/` 用于理解可预测结构、噪声来源、异常机制和模型失效模式。该目录不以短期冲分为目标。
+
+列出实验：
+
+```bash
+./.venv/Scripts/python.exe -m src3_explore list
+```
+
+运行单个实验：
+
+```bash
+./.venv/Scripts/python.exe -m src3_explore residual_atlas
+./.venv/Scripts/python.exe -m src3_explore model_disagreement
+./.venv/Scripts/python.exe -m src3_explore green_red_transfer
+./.venv/Scripts/python.exe -m src3_explore curve_dictionary
+./.venv/Scripts/python.exe -m src3_explore day_embedding
+./.venv/Scripts/python.exe -m src3_explore route_arrival_kernel
+./.venv/Scripts/python.exe -m src3_explore tollgate12_allocation
+./.venv/Scripts/python.exe -m src3_explore etc_component_model
+./.venv/Scripts/python.exe -m src3_explore quantile_baselines
+./.venv/Scripts/python.exe -m src3_explore conformal_intervals
+./.venv/Scripts/python.exe -m src3_explore adversarial_validation
+```
+
+运行全部原型：
+
+```bash
+./.venv/Scripts/python.exe -m src3_explore all --force-cache
+```
+
+默认输出：
+
+```text
+outputs/src3_explore/
+outputs/src3_explore/cards/
+outputs/src3_explore/cache/
+```
+
+`src3_explore` 最近诊断结论：
+
+- 候选模型存在真实多样性；candidate oracle 远强于固定 ensemble，但 winner 上下文预测仍困难。
+- `1_0` 低流量、晚高峰 `18:20` / `18:40` 是稳定 failure mode。
+- 绿色观察窗强弱是真信号；naive 6x6 green-red transfer 和 PCA/NMF/dictionary 补全只能作为诊断基线。
+- route/trajectory 有机制信号，但 raw lead-lag count 不足以直接替代正式树模型。
+- tollgate 1/2 allocation、ETC/component mix 更适合作为 residual join key，而不是独立主模型。
+- conformal interval 覆盖偏保守；quantile baseline 覆盖不足，说明不确定性仍需按 regime 校准。
+- adversarial validation 会被绝对日期特征主导，解释分布偏移前应先去除 `day_of_month` 等显式日期特征。
+
+详细说明见 `src3_explore/README.md`。
+
+## 代码结构
+
+```text
+run_task2.py                         正式入口
+src/kddcup2017_task2/                正式实现
+src1/kddcup2017_task2_exp/           传统探索
+src2/kddcup2017_task2_exp2/          直接序列神经网络探索
+src3_explore/                        结构诊断与失效模式分析
+tests/                               单元测试
+docs/                                路线说明、SOTA 文档和实验日志
+dataset/                             比赛数据
+outputs/                             本地运行产物
+```
+
+正式实现模块：
+
+| 文件 | 职责 |
+| --- | --- |
+| `src/kddcup2017_task2/data.py` | CSV 读取、20 分钟聚合、目标行和提交文件生成 |
+| `src/kddcup2017_task2/features.py` | 日历、观察窗、车辆属性、历史统计特征 |
+| `src/kddcup2017_task2/model.py` | 模型工厂、MAPE、fallback 回归器 |
+| `src/kddcup2017_task2/pipeline.py` | 单模型 `validate` / `predict` 流程 |
+| `src/kddcup2017_task2/ensemble.py` | 四模型候选、权重学习、phase1/phase2 融合流程 |
+
+## 文档
+
+| 文档 | 内容 |
+| --- | --- |
+| `problem.md` | 题面和任务约束 |
+| `docs/sota/four_model_ensemble_getting_started.md` | 当前正式方案入门说明 |
+| `docs/sota/four_model_ensemble_detailed.md` | 当前正式 SOTA 技术细节 |
+| `docs/sota/four_model_ensemble_data_usage.md` | 当前正式 SOTA 数据边界说明 |
+| `docs/routes_overview.md` | 主要路线总览 |
+| `docs/route_exploration_candidates.md` | 正式路线、探索候选和归档方向 |
+| `docs/experiments/src1_exploration_log.md` | `src1` 实验日志 |
+| `docs/experiments/src2_exploration_log.md` | `src2` 实验日志 |
+| `src3_explore/README.md` | `src3_explore` 结构诊断说明和最近运行摘要 |
+
+## 提交前检查
+
+根据变更范围选择最小有效验证命令：
+
+```bash
+./.venv/Scripts/python.exe -m py_compile path/to/changed_file.py
+./.venv/Scripts/python.exe -m unittest tests.test_src3_explore_core
+./.venv/Scripts/python.exe run_task2.py validate-ensemble
+```
+
+正式 SOTA 相关改动必须额外确认：
+
+- phase1 指标优于当前 `0.116167`。
+- 选择过程不使用 train2 标签。
+- rolling 验证或其他 train1-only 机制能解释为什么选择该配置。
+- `docs/sota/` 和相关实验日志同步更新。
